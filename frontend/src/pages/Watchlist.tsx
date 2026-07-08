@@ -1,13 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import axios from "axios";
 import {
+  Activity,
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
   ArrowUpDown,
+  CheckCircle2,
   RefreshCw,
   Search,
+  ShieldAlert,
   Star,
   Trash2,
+  TrendingDown,
+  Zap,
 } from "lucide-react";
-import axios from "axios";
 
 type WatchlistItem = {
   id: number;
@@ -27,19 +35,81 @@ type WatchlistItem = {
   saved_at: string | null;
 };
 
+type SignalItem = {
+  item_id: number;
+  realm_id: number;
+  realm_name: string;
+  name: string;
+  current_price: number;
+  previous_price: number | null;
+  price_change: number;
+  price_change_percent: number;
+  volume: number;
+  previous_volume: number | null;
+  volume_change: number;
+  volume_change_percent: number;
+  listing_count: number;
+  opportunity_score: number;
+  previous_score: number | null;
+  score_change: number;
+  risk_level: string;
+  reason: string | null;
+  icon_url: string | null;
+  quality: string | null;
+  snapshot_count: number;
+  last_seen: string | null;
+  signal: string;
+  signal_label: string;
+  signal_priority: number;
+  signal_action: string;
+  signal_tone: string;
+  signal_confidence: number;
+  signal_reason: string;
+  is_watched: boolean;
+};
+
 type WatchlistResponse = {
   status: string;
   item_count: number;
   items: WatchlistItem[];
 };
 
+type WatchlistSignalsResponse = {
+  status: string;
+  signal_count: number;
+  top_signal: SignalItem | null;
+  summary: {
+    strong_buy_count: number;
+    buy_watch_count: number;
+    price_drop_count: number;
+    score_improving_count: number;
+    hold_count: number;
+    avoid_count: number;
+  };
+  items: SignalItem[];
+};
+
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
 const RISK_FILTERS = ["All", "Low", "Medium", "High"];
 
+const SIGNAL_FILTERS = [
+  "All",
+  "Strong Buy",
+  "Buy Watch",
+  "Price Drop",
+  "Score Improving",
+  "Hold",
+  "Avoid",
+  "No Signal",
+];
+
 const SORT_OPTIONS = [
+  { value: "signal-asc", label: "Best signal" },
+  { value: "confidence-desc", label: "Highest confidence" },
   { value: "saved-desc", label: "Recently added" },
   { value: "score-desc", label: "Best score" },
+  { value: "movement-desc", label: "Biggest movement" },
   { value: "price-desc", label: "Highest price" },
   { value: "volume-desc", label: "Highest volume" },
   { value: "risk-asc", label: "Lowest risk" },
@@ -107,12 +177,70 @@ function getRiskRank(riskLevel: string) {
   }
 }
 
-function formatGold(value: number) {
+function getSignalClass(signal: string) {
+  switch (signal) {
+    case "STRONG_BUY":
+      return "border-emerald-700 bg-emerald-950/50 text-emerald-300";
+    case "BUY_WATCH":
+      return "border-blue-700 bg-blue-950/50 text-blue-300";
+    case "PRICE_DROP":
+      return "border-purple-700 bg-purple-950/50 text-purple-300";
+    case "SCORE_IMPROVING":
+      return "border-cyan-700 bg-cyan-950/50 text-cyan-300";
+    case "AVOID":
+      return "border-red-700 bg-red-950/50 text-red-300";
+    case "HOLD":
+      return "border-slate-700 bg-slate-950 text-slate-300";
+    default:
+      return "border-slate-700 bg-slate-950 text-slate-400";
+  }
+}
+
+function getSignalIcon(signal: string) {
+  switch (signal) {
+    case "STRONG_BUY":
+      return <Zap size={14} />;
+    case "BUY_WATCH":
+      return <CheckCircle2 size={14} />;
+    case "PRICE_DROP":
+      return <TrendingDown size={14} />;
+    case "SCORE_IMPROVING":
+      return <Activity size={14} />;
+    case "AVOID":
+      return <ShieldAlert size={14} />;
+    case "HOLD":
+      return <AlertTriangle size={14} />;
+    default:
+      return <Star size={14} />;
+  }
+}
+
+function getSignalRank(signal: SignalItem | undefined) {
+  if (!signal) {
+    return 99;
+  }
+
+  return signal.signal_priority;
+}
+
+function formatGold(value: number | null) {
+  if (value === null) {
+    return "-";
+  }
+
   return `${Math.round(value).toLocaleString()}g`;
 }
 
 function formatScore(value: number) {
   return `${value.toFixed(1)}/100`;
+}
+
+function formatPercent(value: number) {
+  if (value > 0) {
+    return `+${value.toFixed(2)}%`;
+  }
+
+  return `${value.toFixed(2)}%`;
 }
 
 function formatSavedDate(value: string | null) {
@@ -132,28 +260,54 @@ function formatSavedDate(value: string | null) {
   }
 }
 
+function getSignalStorageKey(realmId: number, itemId: number) {
+  return `${realmId}-${itemId}`;
+}
+
 export default function Watchlist() {
   const [items, setItems] = useState<WatchlistItem[]>([]);
+  const [signals, setSignals] = useState<SignalItem[]>([]);
+  const [topSignal, setTopSignal] = useState<SignalItem | null>(null);
+  const [signalSummary, setSignalSummary] = useState({
+    strong_buy_count: 0,
+    buy_watch_count: 0,
+    price_drop_count: 0,
+    score_improving_count: 0,
+    hold_count: 0,
+    avoid_count: 0,
+  });
+
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
   const [riskFilter, setRiskFilter] = useState("All");
-  const [sortMode, setSortMode] = useState("saved-desc");
+  const [signalFilter, setSignalFilter] = useState("All");
+  const [sortMode, setSortMode] = useState("signal-asc");
 
   async function loadWatchlist() {
     try {
       setLoading(true);
 
-      const response = await axios.get<WatchlistResponse>(
-        `${API_BASE_URL}/watchlist`
-      );
+      const [watchlistResponse, signalsResponse] = await Promise.all([
+        axios.get<WatchlistResponse>(`${API_BASE_URL}/watchlist`),
+        axios.get<WatchlistSignalsResponse>(
+          `${API_BASE_URL}/signals/watchlist`
+        ),
+      ]);
 
-      setItems(response.data.items ?? []);
+      setItems(watchlistResponse.data.items ?? []);
+      setSignals(signalsResponse.data.items ?? []);
+      setTopSignal(signalsResponse.data.top_signal ?? null);
+
+      if (signalsResponse.data.summary) {
+        setSignalSummary(signalsResponse.data.summary);
+      }
+
       setError("");
     } catch {
-      setError("Unable to load backend watchlist.");
+      setError("Unable to load backend watchlist signals.");
     } finally {
       setLoading(false);
     }
@@ -193,12 +347,30 @@ export default function Watchlist() {
     loadWatchlist();
   }, []);
 
+  const signalByItemKey = useMemo(() => {
+    const signalMap = new Map<string, SignalItem>();
+
+    signals.forEach((signal) => {
+      signalMap.set(
+        getSignalStorageKey(signal.realm_id, signal.item_id),
+        signal
+      );
+    });
+
+    return signalMap;
+  }, [signals]);
+
   const filteredItems = useMemo(() => {
     const normalisedSearch = searchTerm.trim().toLowerCase();
 
     const filtered = items.filter((item) => {
       const itemRisk = item.risk_level ?? "unknown";
       const itemQuality = item.quality ?? "unknown";
+      const signal = signalByItemKey.get(
+        getSignalStorageKey(item.realm_id, item.item_id)
+      );
+
+      const signalLabel = signal?.signal_label ?? "No Signal";
 
       const matchesSearch =
         normalisedSearch.length === 0 ||
@@ -206,19 +378,42 @@ export default function Watchlist() {
         item.item_id.toString().includes(normalisedSearch) ||
         item.realm_name.toLowerCase().includes(normalisedSearch) ||
         itemRisk.toLowerCase().includes(normalisedSearch) ||
-        itemQuality.toLowerCase().includes(normalisedSearch);
+        itemQuality.toLowerCase().includes(normalisedSearch) ||
+        signalLabel.toLowerCase().includes(normalisedSearch);
 
       const matchesRisk =
         riskFilter === "All" ||
         itemRisk.toLowerCase() === riskFilter.toLowerCase();
 
-      return matchesSearch && matchesRisk;
+      const matchesSignal =
+        signalFilter === "All" ||
+        signalLabel.toLowerCase() === signalFilter.toLowerCase();
+
+      return matchesSearch && matchesRisk && matchesSignal;
     });
 
     return [...filtered].sort((a, b) => {
+      const signalA = signalByItemKey.get(
+        getSignalStorageKey(a.realm_id, a.item_id)
+      );
+
+      const signalB = signalByItemKey.get(
+        getSignalStorageKey(b.realm_id, b.item_id)
+      );
+
       switch (sortMode) {
+        case "confidence-desc":
+          return (
+            (signalB?.signal_confidence ?? 0) -
+            (signalA?.signal_confidence ?? 0)
+          );
         case "score-desc":
           return b.opportunity_score - a.opportunity_score;
+        case "movement-desc":
+          return (
+            Math.abs(signalB?.price_change_percent ?? 0) -
+            Math.abs(signalA?.price_change_percent ?? 0)
+          );
         case "price-desc":
           return b.current_price - a.current_price;
         case "volume-desc":
@@ -228,35 +423,50 @@ export default function Watchlist() {
         case "name-asc":
           return a.name.localeCompare(b.name);
         case "saved-desc":
-        default:
           return (
             new Date(b.saved_at ?? "").getTime() -
             new Date(a.saved_at ?? "").getTime()
           );
+        case "signal-asc":
+        default:
+          return (
+            getSignalRank(signalA) - getSignalRank(signalB) ||
+            (signalB?.signal_confidence ?? 0) -
+              (signalA?.signal_confidence ?? 0)
+          );
       }
     });
-  }, [items, searchTerm, riskFilter, sortMode]);
+  }, [
+    items,
+    searchTerm,
+    riskFilter,
+    signalFilter,
+    sortMode,
+    signalByItemKey,
+  ]);
 
-  const averageScore = useMemo(() => {
-    if (!items.length) {
+  const averageSignalConfidence = useMemo(() => {
+    if (!signals.length) {
       return 0;
     }
 
     return (
-      items.reduce((sum, item) => sum + item.opportunity_score, 0) /
-      items.length
+      signals.reduce((sum, signal) => sum + signal.signal_confidence, 0) /
+      signals.length
     );
-  }, [items]);
+  }, [signals]);
+
+  const actionableSignalCount = useMemo(() => {
+    return (
+      signalSummary.strong_buy_count +
+      signalSummary.buy_watch_count +
+      signalSummary.price_drop_count +
+      signalSummary.score_improving_count
+    );
+  }, [signalSummary]);
 
   const totalValue = useMemo(() => {
     return items.reduce((sum, item) => sum + item.current_price, 0);
-  }, [items]);
-
-  const mediumOrLowRiskCount = useMemo(() => {
-    return items.filter((item) => {
-      const risk = item.risk_level.toLowerCase();
-      return risk === "low" || risk === "medium";
-    }).length;
   }, [items]);
 
   const bestItem = useMemo(() => {
@@ -278,7 +488,7 @@ export default function Watchlist() {
           </h2>
 
           <p className="mt-1 text-sm text-slate-400">
-            Track auction opportunities saved to the GoldSmith AI backend.
+            Track saved opportunities with live buy signals and movement context.
           </p>
         </div>
 
@@ -335,39 +545,172 @@ export default function Watchlist() {
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Best Watched Item</p>
+          <p className="text-sm text-slate-400">Top Watchlist Signal</p>
 
           <h3 className="mt-2 truncate text-lg font-bold text-emerald-400">
-            {bestItem?.name ?? "-"}
+            {topSignal?.name ?? bestItem?.name ?? "-"}
           </h3>
 
           <p className="mt-1 text-sm text-slate-400">
-            {bestItem ? formatScore(bestItem.opportunity_score) : ""}
+            {topSignal
+              ? `${topSignal.signal_label} · ${topSignal.signal_confidence.toFixed(
+                  1
+                )}%`
+              : bestItem
+                ? formatScore(bestItem.opportunity_score)
+                : ""}
           </p>
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Combined Market Value</p>
+          <p className="text-sm text-slate-400">Actionable Signals</p>
 
-          <h3 className="mt-2 text-4xl font-bold text-amber-400">
-            {loading ? "..." : formatGold(totalValue)}
-          </h3>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Average Score</p>
-
-          <h3
-            className={`mt-2 text-4xl font-bold ${getScoreClass(
-              averageScore
-            )}`}
-          >
-            {loading ? "..." : formatScore(averageScore)}
+          <h3 className="mt-2 text-4xl font-bold text-blue-400">
+            {loading ? "..." : actionableSignalCount}
           </h3>
 
           <p className="mt-1 text-xs text-slate-500">
-            {mediumOrLowRiskCount} lower-risk watched items
+            From {signals.length} watched signals
           </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+          <p className="text-sm text-slate-400">Avg. Confidence</p>
+
+          <h3 className="mt-2 text-4xl font-bold text-amber-400">
+            {loading ? "..." : `${averageSignalConfidence.toFixed(1)}%`}
+          </h3>
+
+          <p className="mt-1 text-xs text-slate-500">
+            Value {formatGold(totalValue)}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 lg:col-span-2">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-semibold text-white">
+                Watchlist Signal Centre
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-400">
+                Highest-priority signal from your saved market opportunities.
+              </p>
+            </div>
+
+            <span className="rounded-full border border-amber-800 bg-amber-950/50 px-3 py-1 text-xs font-semibold text-amber-400">
+              {signals.length} signals
+            </span>
+          </div>
+
+          {topSignal ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  {topSignal.icon_url ? (
+                    <img
+                      src={topSignal.icon_url}
+                      alt={topSignal.name}
+                      className="h-14 w-14 rounded-lg border border-slate-700 bg-slate-950"
+                    />
+                  ) : (
+                    <div className="h-14 w-14 rounded-lg border border-slate-700 bg-slate-950" />
+                  )}
+
+                  <div>
+                    <div
+                      className={`mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
+                        topSignal.signal
+                      )}`}
+                    >
+                      {getSignalIcon(topSignal.signal)}
+                      {topSignal.signal_label}
+                    </div>
+
+                    <h3 className="text-lg font-bold text-white">
+                      {topSignal.name}
+                    </h3>
+
+                    <p className="mt-1 text-sm text-slate-400">
+                      {topSignal.signal_action}
+                    </p>
+
+                    <p className="mt-2 text-xs text-slate-500">
+                      {topSignal.signal_reason}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-right">
+                  <p className="text-xs text-slate-500">Confidence</p>
+
+                  <p className="text-3xl font-bold text-emerald-400">
+                    {topSignal.signal_confidence.toFixed(1)}%
+                  </p>
+
+                  <p className="mt-1 text-xs text-slate-500">
+                    {formatGold(topSignal.current_price)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-8 text-center text-slate-500">
+              No watchlist signals yet. Add items from the Market Scanner and run a sync snapshot.
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="text-xl font-semibold text-white">
+            Watchlist Signal Mix
+          </h2>
+
+          <div className="mt-5 space-y-3">
+            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
+              <span className="text-sm text-emerald-400">Strong Buy</span>
+              <span className="font-bold text-white">
+                {signalSummary.strong_buy_count}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
+              <span className="text-sm text-blue-400">Buy Watch</span>
+              <span className="font-bold text-white">
+                {signalSummary.buy_watch_count}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
+              <span className="text-sm text-purple-400">Price Drop</span>
+              <span className="font-bold text-white">
+                {signalSummary.price_drop_count}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
+              <span className="text-sm text-cyan-400">Score Improving</span>
+              <span className="font-bold text-white">
+                {signalSummary.score_improving_count}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
+              <span className="text-sm text-slate-400">Hold</span>
+              <span className="font-bold text-white">
+                {signalSummary.hold_count}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
+              <span className="text-sm text-red-400">Avoid</span>
+              <span className="font-bold text-white">
+                {signalSummary.avoid_count}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -377,7 +720,7 @@ export default function Watchlist() {
           Watchlist Controls
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-4">
           <div className="relative">
             <Search
               size={16}
@@ -405,6 +748,18 @@ export default function Watchlist() {
           </select>
 
           <select
+            value={signalFilter}
+            onChange={(event) => setSignalFilter(event.target.value)}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-100 outline-none transition focus:border-amber-500"
+          >
+            {SIGNAL_FILTERS.map((signal) => (
+              <option key={signal} value={signal}>
+                Signal: {signal}
+              </option>
+            ))}
+          </select>
+
+          <select
             value={sortMode}
             onChange={(event) => setSortMode(event.target.value)}
             className="rounded-lg border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-100 outline-none transition focus:border-amber-500"
@@ -426,7 +781,7 @@ export default function Watchlist() {
             </h2>
 
             <p className="mt-1 text-sm text-slate-400">
-              Saved items from the Market Scanner.
+              Saved items enriched with current buy signals.
             </p>
           </div>
 
@@ -441,9 +796,10 @@ export default function Watchlist() {
             <thead className="bg-slate-950 text-slate-400">
               <tr>
                 <th className="px-6 py-3 text-left font-medium">Item</th>
-                <th className="px-6 py-3 text-left font-medium">Realm</th>
-                <th className="px-6 py-3 text-left font-medium">Quality</th>
+                <th className="px-6 py-3 text-left font-medium">Signal</th>
+                <th className="px-6 py-3 text-right font-medium">Confidence</th>
                 <th className="px-6 py-3 text-right font-medium">Price</th>
+                <th className="px-6 py-3 text-right font-medium">Movement</th>
                 <th className="px-6 py-3 text-right font-medium">Score</th>
                 <th className="px-6 py-3 text-left font-medium">Risk</th>
                 <th className="px-6 py-3 text-right font-medium">Saved</th>
@@ -455,110 +811,159 @@ export default function Watchlist() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-6 py-12 text-center text-slate-500"
                   >
-                    Loading backend watchlist...
+                    Loading backend watchlist signals...
                   </td>
                 </tr>
               ) : filteredItems.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-6 py-12 text-center text-slate-500"
                   >
                     No watched items yet. Add opportunities from the Market Scanner.
                   </td>
                 </tr>
               ) : (
-                filteredItems.map((item) => (
-                  <tr
-                    key={`${item.realm_id}-${item.item_id}`}
-                    className="border-t border-slate-800 transition hover:bg-slate-800/40"
-                    title={item.reason ?? ""}
-                  >
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        {item.icon_url ? (
-                          <img
-                            src={item.icon_url}
-                            alt={item.name}
-                            className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950"
-                          />
-                        ) : (
-                          <div className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950" />
-                        )}
+                filteredItems.map((item) => {
+                  const signal = signalByItemKey.get(
+                    getSignalStorageKey(item.realm_id, item.item_id)
+                  );
 
-                        <div>
-                          <p className="font-semibold text-white">
-                            {item.name}
-                          </p>
+                  return (
+                    <tr
+                      key={`${item.realm_id}-${item.item_id}`}
+                      className="border-t border-slate-800 transition hover:bg-slate-800/40"
+                      title={signal?.signal_reason ?? item.reason ?? ""}
+                    >
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          {item.icon_url ? (
+                            <img
+                              src={item.icon_url}
+                              alt={item.name}
+                              className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950"
+                            />
+                          ) : (
+                            <div className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950" />
+                          )}
 
-                          <p className="text-xs text-slate-500">
-                            Item #{item.item_id} · {item.listing_count} listings
-                          </p>
+                          <div>
+                            <p className="font-semibold text-white">
+                              {item.name}
+                            </p>
 
-                          <p className="mt-1 max-w-xl truncate text-xs text-slate-400">
-                            {item.reason}
-                          </p>
+                            <p className="text-xs text-slate-500">
+                              {item.realm_name} · Item #{item.item_id} ·{" "}
+                              {item.listing_count} listings
+                            </p>
+
+                            <p className="mt-1 max-w-xl truncate text-xs text-slate-400">
+                              {signal?.signal_action ?? item.reason}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    </td>
+                      </td>
 
-                    <td className="px-6 py-4 text-slate-300">
-                      {item.realm_name}
-                    </td>
+                      <td className="px-6 py-4">
+                        {signal ? (
+                          <span
+                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
+                              signal.signal
+                            )}`}
+                          >
+                            {getSignalIcon(signal.signal)}
+                            {signal.signal_label}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs text-slate-400">
+                            <Star size={14} />
+                            No Signal
+                          </span>
+                        )}
+                      </td>
 
-                    <td className="px-6 py-4">
-                      <span
-                        className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${getQualityClass(
-                          item.quality
-                        )}`}
-                      >
-                        {item.quality ?? "unknown"}
-                      </span>
-                    </td>
+                      <td className="px-6 py-4 text-right">
+                        <span className="font-bold text-emerald-400">
+                          {signal
+                            ? `${signal.signal_confidence.toFixed(1)}%`
+                            : "-"}
+                        </span>
+                      </td>
 
-                    <td className="px-6 py-4 text-right font-semibold text-emerald-400">
-                      {formatGold(item.current_price)}
-                    </td>
+                      <td className="px-6 py-4 text-right font-semibold text-emerald-400">
+                        {formatGold(signal?.current_price ?? item.current_price)}
+                      </td>
 
-                    <td className="px-6 py-4 text-right">
-                      <span
-                        className={`font-bold ${getScoreClass(
-                          item.opportunity_score
-                        )}`}
-                      >
-                        {formatScore(item.opportunity_score)}
-                      </span>
-                    </td>
+                      <td className="px-6 py-4 text-right">
+                        {signal ? (
+                          <span
+                            className={`inline-flex items-center justify-end gap-1 font-bold ${
+                              signal.price_change_percent > 0
+                                ? "text-emerald-400"
+                                : signal.price_change_percent < 0
+                                  ? "text-red-400"
+                                  : "text-slate-400"
+                            }`}
+                          >
+                            {signal.price_change_percent > 0 && (
+                              <ArrowUpRight size={14} />
+                            )}
 
-                    <td className="px-6 py-4">
-                      <span
-                        className={`rounded-full border px-3 py-1 text-xs font-semibold ${getRiskClass(
-                          item.risk_level
-                        )}`}
-                      >
-                        {item.risk_level}
-                      </span>
-                    </td>
+                            {signal.price_change_percent < 0 && (
+                              <ArrowDownRight size={14} />
+                            )}
 
-                    <td className="px-6 py-4 text-right text-xs text-slate-500">
-                      {formatSavedDate(item.saved_at)}
-                    </td>
+                            {formatPercent(signal.price_change_percent)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-500">-</span>
+                        )}
+                      </td>
 
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => removeItem(item.item_id, item.realm_id)}
-                        disabled={updating}
-                        className="inline-flex items-center gap-2 rounded-lg border border-red-900 bg-red-950/30 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Trash2 size={14} />
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                      <td className="px-6 py-4 text-right">
+                        <span
+                          className={`font-bold ${getScoreClass(
+                            signal?.opportunity_score ??
+                              item.opportunity_score
+                          )}`}
+                        >
+                          {formatScore(
+                            signal?.opportunity_score ??
+                              item.opportunity_score
+                          )}
+                        </span>
+                      </td>
+
+                      <td className="px-6 py-4">
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs font-semibold ${getRiskClass(
+                            signal?.risk_level ?? item.risk_level
+                          )}`}
+                        >
+                          {signal?.risk_level ?? item.risk_level}
+                        </span>
+                      </td>
+
+                      <td className="px-6 py-4 text-right text-xs text-slate-500">
+                        {formatSavedDate(item.saved_at)}
+                      </td>
+
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => removeItem(item.item_id, item.realm_id)}
+                          disabled={updating}
+                          className="inline-flex items-center gap-2 rounded-lg border border-red-900 bg-red-950/30 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Trash2 size={14} />
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
