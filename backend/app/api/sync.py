@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete
@@ -10,6 +12,160 @@ router = APIRouter(
     prefix="/api",
     tags=["Sync"],
 )
+
+
+QUALITY_SCORE = {
+    "poor": 1,
+    "common": 2,
+    "uncommon": 5,
+    "rare": 7,
+    "epic": 10,
+    "legendary": 12,
+    "artifact": 12,
+    "heirloom": 6,
+    "wow_token": 4,
+}
+
+
+async def get_display_data_safely(item_id: int) -> dict:
+    try:
+        return await asyncio.wait_for(
+            blizzard_service.get_item_display_data(item_id),
+            timeout=8,
+        )
+
+    except Exception as error:
+        print(
+            f"[ITEM METADATA WARNING] Falling back for item_id={item_id}: {error}"
+        )
+
+        return {
+            "item_id": item_id,
+            "name": f"Item {item_id}",
+            "quality": "unknown",
+            "icon_url": None,
+        }
+
+
+def calculate_opportunity_score(
+    price: float,
+    volume: int,
+    listing_count: int,
+    quality: str | None,
+) -> float:
+    quality_key = (quality or "unknown").lower()
+
+    value_score = min(price / 100000, 1) * 30
+    volume_score = min(volume / 50, 1) * 35
+    listing_score = min(listing_count / 20, 1) * 25
+    rarity_score = QUALITY_SCORE.get(quality_key, 3)
+
+    score = value_score + volume_score + listing_score + rarity_score
+
+    if volume < 10:
+        score -= 18
+    elif volume < 20:
+        score -= 10
+
+    if listing_count <= 3:
+        score -= 10
+    elif listing_count <= 6:
+        score -= 5
+
+    if price > 150000 and volume < 20:
+        score -= 10
+
+    return round(max(1, min(score, 100)), 1)
+
+
+def calculate_risk_level(
+    price: float,
+    volume: int,
+    listing_count: int,
+    opportunity_score: float,
+) -> str:
+    if volume < 10 or listing_count <= 3:
+        return "High"
+
+    if price > 150000 and volume < 25:
+        return "High"
+
+    if opportunity_score >= 75 and volume >= 30 and listing_count >= 10:
+        return "Low"
+
+    if opportunity_score >= 50 and volume >= 12 and listing_count >= 5:
+        return "Medium"
+
+    return "High"
+
+
+def build_reason(
+    volume: int,
+    listing_count: int,
+    quality: str | None,
+    opportunity_score: float,
+    risk_level: str,
+) -> str:
+    quality_label = (quality or "unknown").capitalize()
+
+    if risk_level == "Low":
+        return (
+            f"Strong opportunity: {quality_label} item with {volume} total quantity "
+            f"across {listing_count} listings and a score of {opportunity_score}/100."
+        )
+
+    if risk_level == "Medium":
+        return (
+            f"Moderate opportunity: {quality_label} item with {volume} quantity "
+            f"across {listing_count} listings. Worth reviewing before buying."
+        )
+
+    return (
+        f"Higher-risk opportunity: limited market depth with {volume} quantity "
+        f"across {listing_count} listings. Check sell-through before buying."
+    )
+
+
+async def enrich_candidate(candidate: dict, semaphore: asyncio.Semaphore) -> dict:
+    async with semaphore:
+        item_id = candidate["item_id"]
+
+        display_data = await get_display_data_safely(item_id)
+
+        opportunity_score = calculate_opportunity_score(
+            price=candidate["price"],
+            volume=candidate["volume"],
+            listing_count=candidate["listing_count"],
+            quality=display_data["quality"],
+        )
+
+        risk_level = calculate_risk_level(
+            price=candidate["price"],
+            volume=candidate["volume"],
+            listing_count=candidate["listing_count"],
+            opportunity_score=opportunity_score,
+        )
+
+        reason = build_reason(
+            volume=candidate["volume"],
+            listing_count=candidate["listing_count"],
+            quality=display_data["quality"],
+            opportunity_score=opportunity_score,
+            risk_level=risk_level,
+        )
+
+        return {
+            "item_id": item_id,
+            "name": display_data["name"],
+            "price": candidate["price"],
+            "volume": candidate["volume"],
+            "listing_count": candidate["listing_count"],
+            "icon_url": display_data["icon_url"],
+            "quality": display_data["quality"],
+            "opportunity_score": opportunity_score,
+            "risk_level": risk_level,
+            "reason": reason,
+        }
 
 
 @router.post("/sync-auctions")
@@ -36,8 +192,7 @@ async def sync_auctions(
 
         print(f"[SYNC] Auctions downloaded: {len(auctions)}")
 
-        item_prices: dict[int, float] = {}
-        item_volumes: dict[int, int] = {}
+        item_stats: dict[int, dict[str, float | int]] = {}
 
         for auction in auctions:
             item = auction.get("item", {})
@@ -59,35 +214,90 @@ async def sync_auctions(
             price_gold = raw_price / 10000
             quantity = auction.get("quantity", 1)
 
-            if 5.0 <= price_gold <= 200000.0:
-                if item_id not in item_prices or price_gold < item_prices[item_id]:
-                    item_prices[item_id] = price_gold
+            if not 5.0 <= price_gold <= 200000.0:
+                continue
 
-                item_volumes[item_id] = item_volumes.get(item_id, 0) + quantity
+            if item_id not in item_stats:
+                item_stats[item_id] = {
+                    "min_price": price_gold,
+                    "volume": 0,
+                    "listing_count": 0,
+                }
 
-        valuable_items = []
+            item_stats[item_id]["min_price"] = min(
+                float(item_stats[item_id]["min_price"]),
+                price_gold,
+            )
 
-        for item_id, price in item_prices.items():
-            volume = item_volumes.get(item_id, 1)
+            item_stats[item_id]["volume"] = int(item_stats[item_id]["volume"]) + int(
+                quantity
+            )
 
-            if volume > 5:
-                estimated_profit = round(price * 0.12, 2)
+            item_stats[item_id]["listing_count"] = (
+                int(item_stats[item_id]["listing_count"]) + 1
+            )
 
-                valuable_items.append(
-                    {
-                        "item_id": item_id,
-                        "price": price,
-                        "volume": volume,
-                        "score": estimated_profit,
-                    }
-                )
+        candidates = []
 
-        valuable_items.sort(
-            key=lambda item: item["score"],
+        for item_id, stats in item_stats.items():
+            price = float(stats["min_price"])
+            volume = int(stats["volume"])
+            listing_count = int(stats["listing_count"])
+
+            if volume < 6:
+                continue
+
+            preliminary_score = (
+                min(price / 100000, 1) * 40
+                + min(volume / 50, 1) * 35
+                + min(listing_count / 20, 1) * 25
+            )
+
+            candidates.append(
+                {
+                    "item_id": item_id,
+                    "price": round(price, 2),
+                    "volume": volume,
+                    "listing_count": listing_count,
+                    "preliminary_score": round(preliminary_score, 1),
+                }
+            )
+
+        candidates.sort(
+            key=lambda item: (
+                item["preliminary_score"],
+                item["volume"],
+                item["price"],
+            ),
             reverse=True,
         )
 
-        top_opportunities = valuable_items[:15]
+        metadata_pool = candidates[:15]
+
+        print(
+            f"[SYNC] Candidates found={len(candidates)}. "
+            f"Fetching metadata for top {len(metadata_pool)} items..."
+        )
+
+        semaphore = asyncio.Semaphore(8)
+
+        enriched_candidates = await asyncio.gather(
+            *[
+                enrich_candidate(candidate, semaphore)
+                for candidate in metadata_pool
+            ]
+        )
+
+        enriched_candidates.sort(
+            key=lambda item: (
+                item["opportunity_score"],
+                item["volume"],
+                item["price"],
+            ),
+            reverse=True,
+        )
+
+        top_opportunities = enriched_candidates[:15]
 
         await db.execute(
             delete(TrackedItem).where(
@@ -98,26 +308,29 @@ async def sync_auctions(
         await db.flush()
 
         for opportunity in top_opportunities:
-            item_id = opportunity["item_id"]
-
-            display_data = await blizzard_service.get_item_display_data(item_id)
-
             db.add(
                 TrackedItem(
-                    item_id=item_id,
+                    item_id=opportunity["item_id"],
                     realm_id=connected_realm_id,
-                    name=display_data["name"],
+                    name=opportunity["name"],
                     current_price=opportunity["price"],
-                    profit_margin=opportunity["score"],
-                    icon_url=display_data["icon_url"],
-                    quality=display_data["quality"],
+                    volume=opportunity["volume"],
+                    listing_count=opportunity["listing_count"],
+                    opportunity_score=opportunity["opportunity_score"],
+                    risk_level=opportunity["risk_level"],
+                    reason=opportunity["reason"],
+                    icon_url=opportunity["icon_url"],
+                    quality=opportunity["quality"],
+                    profit_margin=opportunity["opportunity_score"],
                 )
             )
 
         await db.commit()
 
         print(
-            f"[SYNC] Completed. Items scanned={len(item_prices)}, "
+            f"[SYNC] Completed. Items scanned={len(item_stats)}, "
+            f"candidates={len(candidates)}, "
+            f"metadata_enriched={len(enriched_candidates)}, "
             f"opportunities={len(top_opportunities)}"
         )
 
@@ -125,7 +338,9 @@ async def sync_auctions(
             "status": "Success",
             "connected_realm_id": connected_realm_id,
             "auctions_downloaded": len(auctions),
-            "items_scanned": len(item_prices),
+            "items_scanned": len(item_stats),
+            "candidates_found": len(candidates),
+            "metadata_enriched": len(enriched_candidates),
             "opportunities_unlocked": len(top_opportunities),
         }
 

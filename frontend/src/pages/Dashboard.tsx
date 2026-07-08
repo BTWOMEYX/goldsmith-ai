@@ -6,9 +6,14 @@ type TrackedItem = {
   item_id: number;
   name: string;
   current_price: number;
-  profit_margin: number;
+  volume: number;
+  listing_count: number;
+  opportunity_score: number;
+  risk_level: string;
+  reason: string | null;
   icon_url: string | null;
   quality: string | null;
+  profit_margin: number;
 };
 
 type DashboardResponse = {
@@ -45,8 +50,41 @@ function getQualityClass(quality: string | null) {
   }
 }
 
+function getRiskClass(riskLevel: string) {
+  switch (riskLevel.toLowerCase()) {
+    case "low":
+      return "text-emerald-400 border-emerald-800 bg-emerald-950/40";
+    case "medium":
+      return "text-amber-400 border-amber-800 bg-amber-950/40";
+    case "high":
+      return "text-red-400 border-red-800 bg-red-950/40";
+    default:
+      return "text-slate-400 border-slate-700 bg-slate-900";
+  }
+}
+
+function getScoreClass(score: number) {
+  if (score >= 80) {
+    return "text-emerald-400";
+  }
+
+  if (score >= 60) {
+    return "text-blue-400";
+  }
+
+  if (score >= 40) {
+    return "text-amber-400";
+  }
+
+  return "text-red-400";
+}
+
 function formatGold(value: number) {
   return `${Math.round(value).toLocaleString()}g`;
+}
+
+function formatScore(value: number) {
+  return `${value.toFixed(1)}/100`;
 }
 
 export default function Dashboard() {
@@ -99,15 +137,19 @@ export default function Dashboard() {
   const totalItems = items.length;
 
   const bestItem = useMemo(() => {
-    if (!items.length) return null;
+    if (!items.length) {
+      return null;
+    }
 
     return [...items].sort(
-      (a, b) => b.profit_margin - a.profit_margin
+      (a, b) => b.opportunity_score - a.opportunity_score
     )[0];
   }, [items]);
 
   const averagePrice = useMemo(() => {
-    if (!items.length) return 0;
+    if (!items.length) {
+      return 0;
+    }
 
     return (
       items.reduce((sum, item) => sum + item.current_price, 0) /
@@ -115,8 +157,21 @@ export default function Dashboard() {
     );
   }, [items]);
 
-  const totalEstimatedProfit = useMemo(() => {
-    return items.reduce((sum, item) => sum + item.profit_margin, 0);
+  const averageScore = useMemo(() => {
+    if (!items.length) {
+      return 0;
+    }
+
+    return (
+      items.reduce((sum, item) => sum + item.opportunity_score, 0) /
+      items.length
+    );
+  }, [items]);
+
+  const lowRiskCount = useMemo(() => {
+    return items.filter(
+      (item) => item.risk_level.toLowerCase() === "low"
+    ).length;
   }, [items]);
 
   return (
@@ -128,7 +183,7 @@ export default function Dashboard() {
           </h2>
 
           <p className="mt-1 text-sm text-slate-400">
-            Live auction intelligence generated from the Blizzard API.
+            Live auction intelligence ranked by value, volume, rarity and risk.
           </p>
         </div>
 
@@ -163,7 +218,7 @@ export default function Dashboard() {
 
       <div className="grid gap-6 md:grid-cols-4">
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Tracked Items</p>
+          <p className="text-sm text-slate-400">Tracked Opportunities</p>
 
           <h3 className="mt-2 text-4xl font-bold text-white">
             {loading ? "..." : totalItems}
@@ -178,7 +233,7 @@ export default function Dashboard() {
           </h3>
 
           <p className="mt-1 text-sm text-slate-400">
-            {bestItem ? `+${formatGold(bestItem.profit_margin)} est.` : ""}
+            {bestItem ? formatScore(bestItem.opportunity_score) : ""}
           </p>
         </div>
 
@@ -191,11 +246,19 @@ export default function Dashboard() {
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Estimated Profit Pool</p>
+          <p className="text-sm text-slate-400">Avg. Opportunity Score</p>
 
-          <h3 className="mt-2 text-4xl font-bold text-blue-400">
-            {loading ? "..." : formatGold(totalEstimatedProfit)}
+          <h3
+            className={`mt-2 text-4xl font-bold ${getScoreClass(
+              averageScore
+            )}`}
+          >
+            {loading ? "..." : formatScore(averageScore)}
           </h3>
+
+          <p className="mt-1 text-xs text-slate-500">
+            {lowRiskCount} low-risk picks
+          </p>
         </div>
       </div>
 
@@ -207,7 +270,7 @@ export default function Dashboard() {
             </h2>
 
             <p className="mt-1 text-sm text-slate-400">
-              Top auction opportunities ranked by estimated profit.
+              Ranked by opportunity score, market depth and estimated risk.
             </p>
           </div>
 
@@ -222,9 +285,10 @@ export default function Dashboard() {
               <tr>
                 <th className="px-6 py-3 text-left font-medium">Item</th>
                 <th className="px-6 py-3 text-left font-medium">Quality</th>
-                <th className="px-6 py-3 text-left font-medium">Item ID</th>
-                <th className="px-6 py-3 text-right font-medium">Market Price</th>
-                <th className="px-6 py-3 text-right font-medium">Est. Profit</th>
+                <th className="px-6 py-3 text-right font-medium">Price</th>
+                <th className="px-6 py-3 text-right font-medium">Volume</th>
+                <th className="px-6 py-3 text-right font-medium">Score</th>
+                <th className="px-6 py-3 text-left font-medium">Risk</th>
               </tr>
             </thead>
 
@@ -232,7 +296,7 @@ export default function Dashboard() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={6}
                     className="px-6 py-12 text-center text-slate-500"
                   >
                     Loading market data...
@@ -241,7 +305,7 @@ export default function Dashboard() {
               ) : items.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={6}
                     className="px-6 py-12 text-center text-slate-500"
                   >
                     No auction data yet. Click Sync Auctions to begin.
@@ -252,6 +316,7 @@ export default function Dashboard() {
                   <tr
                     key={item.id}
                     className="border-t border-slate-800 transition hover:bg-slate-800/40"
+                    title={item.reason ?? ""}
                   >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
@@ -271,7 +336,11 @@ export default function Dashboard() {
                           </p>
 
                           <p className="text-xs text-slate-500">
-                            Blizzard Item #{item.item_id}
+                            Item #{item.item_id} · {item.listing_count} listings
+                          </p>
+
+                          <p className="mt-1 max-w-xl truncate text-xs text-slate-400">
+                            {item.reason}
                           </p>
                         </div>
                       </div>
@@ -287,17 +356,31 @@ export default function Dashboard() {
                       </span>
                     </td>
 
-                    <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                      {item.item_id}
-                    </td>
-
                     <td className="px-6 py-4 text-right font-semibold text-emerald-400">
                       {formatGold(item.current_price)}
                     </td>
 
+                    <td className="px-6 py-4 text-right font-semibold text-slate-200">
+                      {item.volume.toLocaleString()}
+                    </td>
+
                     <td className="px-6 py-4 text-right">
-                      <span className="rounded-lg border border-blue-800 bg-blue-950/40 px-3 py-1 font-semibold text-blue-400">
-                        +{formatGold(item.profit_margin)}
+                      <span
+                        className={`font-bold ${getScoreClass(
+                          item.opportunity_score
+                        )}`}
+                      >
+                        {formatScore(item.opportunity_score)}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4">
+                      <span
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold ${getRiskClass(
+                          item.risk_level
+                        )}`}
+                      >
+                        {item.risk_level}
                       </span>
                     </td>
                   </tr>

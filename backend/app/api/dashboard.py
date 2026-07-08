@@ -27,7 +27,7 @@ async def get_dashboard_data(
         result = await db.execute(
             select(TrackedItem)
             .where(TrackedItem.realm_id == connected_realm_id)
-            .order_by(TrackedItem.profit_margin.desc())
+            .order_by(TrackedItem.opportunity_score.desc())
         )
 
         items = result.scalars().all()
@@ -46,9 +46,14 @@ async def get_dashboard_data(
                     "item_id": item.item_id,
                     "name": item.name,
                     "current_price": item.current_price,
-                    "profit_margin": item.profit_margin,
+                    "volume": item.volume,
+                    "listing_count": item.listing_count,
+                    "opportunity_score": item.opportunity_score,
+                    "risk_level": item.risk_level,
+                    "reason": item.reason,
                     "icon_url": item.icon_url,
                     "quality": item.quality,
+                    "profit_margin": item.profit_margin,
                 }
                 for item in items
             ],
