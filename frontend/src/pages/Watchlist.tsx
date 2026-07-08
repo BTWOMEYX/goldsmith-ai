@@ -113,6 +113,7 @@ const SORT_OPTIONS = [
   { value: "price-desc", label: "Highest price" },
   { value: "volume-desc", label: "Highest volume" },
   { value: "risk-asc", label: "Lowest risk" },
+  { value: "realm-asc", label: "Realm name" },
   { value: "name-asc", label: "Item name" },
 ];
 
@@ -341,6 +342,16 @@ export default function Watchlist() {
     return signalMap;
   }, [signals]);
 
+  const watchedRealmCount = useMemo(() => {
+    return new Set(items.map((item) => item.realm_id)).size;
+  }, [items]);
+
+  const watchedRealmNames = useMemo(() => {
+    return Array.from(new Set(items.map((item) => item.realm_name))).sort(
+      (a, b) => a.localeCompare(b)
+    );
+  }, [items]);
+
   const filteredItems = useMemo(() => {
     const normalisedSearch = searchTerm.trim().toLowerCase();
 
@@ -358,6 +369,7 @@ export default function Watchlist() {
         item.name.toLowerCase().includes(normalisedSearch) ||
         item.item_id.toString().includes(normalisedSearch) ||
         item.realm_name.toLowerCase().includes(normalisedSearch) ||
+        item.realm_id.toString().includes(normalisedSearch) ||
         itemRisk.toLowerCase().includes(normalisedSearch) ||
         itemQuality.toLowerCase().includes(normalisedSearch) ||
         signalLabel.toLowerCase().includes(normalisedSearch);
@@ -401,6 +413,11 @@ export default function Watchlist() {
           return b.volume - a.volume;
         case "risk-asc":
           return getRiskRank(a.risk_level) - getRiskRank(b.risk_level);
+        case "realm-asc":
+          return (
+            a.realm_name.localeCompare(b.realm_name) ||
+            a.name.localeCompare(b.name)
+          );
         case "name-asc":
           return a.name.localeCompare(b.name);
         case "saved-desc":
@@ -464,12 +481,11 @@ export default function Watchlist() {
     <div className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-white">
-            Watchlist
-          </h2>
+          <h2 className="text-xl font-semibold text-white">Watchlist</h2>
 
           <p className="mt-1 text-sm text-slate-400">
-            Track saved opportunities with live buy signals and movement context.
+            Track saved opportunities with live buy signals, realm context and
+            movement data.
           </p>
         </div>
 
@@ -479,11 +495,7 @@ export default function Watchlist() {
             disabled={loading || updating}
             className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-5 py-2 text-sm font-semibold text-slate-200 transition hover:border-slate-600 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RefreshCw
-              size={16}
-              className={loading ? "animate-spin" : ""}
-            />
-
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
             Refresh
           </button>
 
@@ -526,6 +538,23 @@ export default function Watchlist() {
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+          <p className="text-sm text-slate-400">Servers Watched</p>
+
+          <h3 className="mt-2 text-4xl font-bold text-amber-400">
+            {loading ? "..." : watchedRealmCount}
+          </h3>
+
+          <p
+            className="mt-1 truncate text-xs text-slate-500"
+            title={watchedRealmNames.join(", ")}
+          >
+            {watchedRealmNames.length > 0
+              ? watchedRealmNames.join(", ")
+              : "No servers yet"}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
           <p className="text-sm text-slate-400">Top Watchlist Signal</p>
 
           <h3 className="mt-2 truncate text-lg font-bold text-emerald-400">
@@ -534,11 +563,13 @@ export default function Watchlist() {
 
           <p className="mt-1 text-sm text-slate-400">
             {topSignal
-              ? `${topSignal.signal_label} · ${topSignal.signal_confidence.toFixed(
+              ? `${topSignal.realm_name} · ${topSignal.signal_label} · ${topSignal.signal_confidence.toFixed(
                   1
                 )}%`
               : bestItem
-                ? formatScore(bestItem.opportunity_score)
+                ? `${bestItem.realm_name} · ${formatScore(
+                    bestItem.opportunity_score
+                  )}`
                 : ""}
           </p>
         </div>
@@ -551,19 +582,7 @@ export default function Watchlist() {
           </h3>
 
           <p className="mt-1 text-xs text-slate-500">
-            From {signals.length} watched signals
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Avg. Confidence</p>
-
-          <h3 className="mt-2 text-4xl font-bold text-amber-400">
-            {loading ? "..." : `${averageSignalConfidence.toFixed(1)}%`}
-          </h3>
-
-          <p className="mt-1 text-xs text-slate-500">
-            Value {formatGold(totalValue)}
+            Avg. confidence {averageSignalConfidence.toFixed(1)}%
           </p>
         </div>
       </div>
@@ -601,20 +620,30 @@ export default function Watchlist() {
                   )}
 
                   <div>
-                    <div
-                      className={`mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
-                        topSignal.signal
-                      )}`}
-                    >
-                      {getSignalIcon(topSignal.signal)}
-                      {topSignal.signal_label}
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <div
+                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
+                          topSignal.signal
+                        )}`}
+                      >
+                        {getSignalIcon(topSignal.signal)}
+                        {topSignal.signal_label}
+                      </div>
+
+                      <span className="rounded-full border border-amber-800 bg-amber-950/40 px-3 py-1 text-xs font-semibold text-amber-300">
+                        {topSignal.realm_name}
+                      </span>
                     </div>
 
                     <h3 className="text-lg font-bold text-white">
                       {topSignal.name}
                     </h3>
 
-                    <p className="mt-1 text-sm text-slate-400">
+                    <p className="mt-1 text-xs text-slate-500">
+                      Connected Realm #{topSignal.realm_id}
+                    </p>
+
+                    <p className="mt-2 text-sm text-slate-400">
                       {topSignal.signal_action}
                     </p>
 
@@ -639,7 +668,8 @@ export default function Watchlist() {
             </div>
           ) : (
             <div className="rounded-xl border border-slate-800 bg-slate-950 p-8 text-center text-slate-500">
-              No watchlist signals yet. Add items from the Market Scanner and run a sync snapshot.
+              No watchlist signals yet. Add items from the Market Scanner and
+              run a sync snapshot.
             </div>
           )}
         </div>
@@ -711,7 +741,7 @@ export default function Watchlist() {
             <input
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search watched items..."
+              placeholder="Search item, realm, ID, signal or risk..."
               className="w-full rounded-lg border border-slate-700 bg-slate-950 py-2 pl-10 pr-4 text-sm text-white outline-none transition focus:border-amber-500"
             />
           </div>
@@ -762,7 +792,7 @@ export default function Watchlist() {
             </h2>
 
             <p className="mt-1 text-sm text-slate-400">
-              Saved items enriched with current buy signals.
+              Saved items enriched with current buy signals and server context.
             </p>
           </div>
 
@@ -777,10 +807,15 @@ export default function Watchlist() {
             <thead className="bg-slate-950 text-slate-400">
               <tr>
                 <th className="px-6 py-3 text-left font-medium">Item</th>
+                <th className="px-6 py-3 text-left font-medium">Realm</th>
                 <th className="px-6 py-3 text-left font-medium">Signal</th>
-                <th className="px-6 py-3 text-right font-medium">Confidence</th>
+                <th className="px-6 py-3 text-right font-medium">
+                  Confidence
+                </th>
                 <th className="px-6 py-3 text-right font-medium">Price</th>
-                <th className="px-6 py-3 text-right font-medium">Movement</th>
+                <th className="px-6 py-3 text-right font-medium">
+                  Movement
+                </th>
                 <th className="px-6 py-3 text-right font-medium">Score</th>
                 <th className="px-6 py-3 text-left font-medium">Risk</th>
                 <th className="px-6 py-3 text-right font-medium">Saved</th>
@@ -792,7 +827,7 @@ export default function Watchlist() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={10}
                     className="px-6 py-12 text-center text-slate-500"
                   >
                     Loading backend watchlist signals...
@@ -801,10 +836,11 @@ export default function Watchlist() {
               ) : filteredItems.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={10}
                     className="px-6 py-12 text-center text-slate-500"
                   >
-                    No watched items yet. Add opportunities from the Market Scanner.
+                    No watched items yet. Add opportunities from the Market
+                    Scanner.
                   </td>
                 </tr>
               ) : (
@@ -837,14 +873,26 @@ export default function Watchlist() {
                             </p>
 
                             <p className="text-xs text-slate-500">
-                              {item.realm_name} · Item #{item.item_id} ·{" "}
-                              {item.listing_count} listings
+                              Item #{item.item_id} · {item.listing_count}{" "}
+                              listings
                             </p>
 
                             <p className="mt-1 max-w-xl truncate text-xs text-slate-400">
                               {signal?.signal_action ?? item.reason}
                             </p>
                           </div>
+                        </div>
+                      </td>
+
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col gap-1">
+                          <span className="inline-flex w-fit rounded-full border border-amber-800 bg-amber-950/40 px-3 py-1 text-xs font-semibold text-amber-300">
+                            {item.realm_name}
+                          </span>
+
+                          <span className="text-xs text-slate-500">
+                            Realm #{item.realm_id}
+                          </span>
                         </div>
                       </td>
 
@@ -949,6 +997,15 @@ export default function Watchlist() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <p className="text-sm text-slate-400">
+          Total watched market value:{" "}
+          <span className="font-semibold text-emerald-400">
+            {formatGold(totalValue)}
+          </span>
+        </p>
       </div>
     </div>
   );
