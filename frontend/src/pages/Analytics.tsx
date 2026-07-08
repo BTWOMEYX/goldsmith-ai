@@ -16,6 +16,8 @@ import {
   Zap,
 } from "lucide-react";
 
+import RealmSelect from "../components/RealmSelect";
+
 type SignalItem = {
   item_id: number;
   realm_id: number;
@@ -69,13 +71,6 @@ type SignalsResponse = {
 };
 
 const API_BASE_URL = "http://127.0.0.1:8000/api";
-
-const REALMS = [
-  { id: 11, name: "US - Illidan" },
-  { id: 4, name: "US - Area 52" },
-  { id: 12, name: "US - Sargeras" },
-  { id: 53, name: "US - Tichondrius" },
-];
 
 const SIGNAL_FILTERS = [
   "All",
@@ -415,17 +410,7 @@ export default function Analytics() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <select
-            value={realm}
-            onChange={(event) => setRealm(Number(event.target.value))}
-            className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 outline-none transition hover:border-slate-600 focus:border-amber-500"
-          >
-            {REALMS.map((realmOption) => (
-              <option key={realmOption.id} value={realmOption.id}>
-                {realmOption.name}
-              </option>
-            ))}
-          </select>
+          <RealmSelect value={realm} onChange={setRealm} />
 
           <button
             onClick={() => loadAnalytics(realm)}
