@@ -26,7 +26,7 @@ type TrackedItem = {
 type WatchlistItem = TrackedItem & {
   realm_id: number;
   realm_name: string;
-  saved_at: string;
+  saved_at: string | null;
 };
 
 type DashboardResponse = {
@@ -37,7 +37,13 @@ type DashboardResponse = {
   items: TrackedItem[];
 };
 
-const WATCHLIST_STORAGE_KEY = "goldsmith_watchlist_items";
+type WatchlistResponse = {
+  status: string;
+  item_count: number;
+  items: WatchlistItem[];
+};
+
+const API_BASE_URL = "http://127.0.0.1:8000/api";
 
 const REALMS = [
   { id: 11, name: "US - Illidan" },
@@ -137,24 +143,6 @@ function formatScore(value: number) {
   return `${value.toFixed(1)}/100`;
 }
 
-function loadStoredWatchlist(): WatchlistItem[] {
-  try {
-    const storedItems = localStorage.getItem(WATCHLIST_STORAGE_KEY);
-
-    if (!storedItems) {
-      return [];
-    }
-
-    return JSON.parse(storedItems) as WatchlistItem[];
-  } catch {
-    return [];
-  }
-}
-
-function saveStoredWatchlist(items: WatchlistItem[]) {
-  localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(items));
-}
-
 export default function MarketScanner() {
   const [realm, setRealm] = useState(11);
   const [realmName, setRealmName] = useState("Illidan");
@@ -162,6 +150,7 @@ export default function MarketScanner() {
   const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [error, setError] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -174,7 +163,7 @@ export default function MarketScanner() {
       setLoading(true);
 
       const response = await axios.get<DashboardResponse>(
-        `http://127.0.0.1:8000/api/dashboard?connected_realm_id=${realmId}`
+        `${API_BASE_URL}/dashboard?connected_realm_id=${realmId}`
       );
 
       setRealmName(response.data.realm);
@@ -187,16 +176,33 @@ export default function MarketScanner() {
     }
   }
 
+  async function loadWatchlist() {
+    try {
+      setWatchlistLoading(true);
+
+      const response = await axios.get<WatchlistResponse>(
+        `${API_BASE_URL}/watchlist`
+      );
+
+      setWatchlistItems(response.data.items ?? []);
+    } catch {
+      setError("Unable to load backend watchlist.");
+    } finally {
+      setWatchlistLoading(false);
+    }
+  }
+
   async function syncRealm() {
     try {
       setSyncing(true);
       setError("");
 
       await axios.post(
-        `http://127.0.0.1:8000/api/sync-auctions?connected_realm_id=${realm}`
+        `${API_BASE_URL}/sync-auctions?connected_realm_id=${realm}`
       );
 
       await loadScannerData(realm);
+      await loadWatchlist();
     } catch {
       setError("Auction sync failed.");
     } finally {
@@ -212,36 +218,45 @@ export default function MarketScanner() {
     );
   }
 
-  function toggleWatchlist(item: TrackedItem) {
-    const alreadyWatched = isItemWatched(item);
+  async function toggleWatchlist(item: TrackedItem) {
+    try {
+      setWatchlistLoading(true);
+      setError("");
 
-    let nextWatchlist: WatchlistItem[];
+      const alreadyWatched = isItemWatched(item);
 
-    if (alreadyWatched) {
-      nextWatchlist = watchlistItems.filter(
-        (watchlistItem) =>
-          !(
-            watchlistItem.item_id === item.item_id &&
-            watchlistItem.realm_id === realm
-          )
-      );
-    } else {
-      const newItem: WatchlistItem = {
-        ...item,
-        realm_id: realm,
-        realm_name: realmName,
-        saved_at: new Date().toISOString(),
-      };
+      if (alreadyWatched) {
+        await axios.delete(
+          `${API_BASE_URL}/watchlist/${realm}/${item.item_id}`
+        );
+      } else {
+        await axios.post(`${API_BASE_URL}/watchlist`, {
+          item_id: item.item_id,
+          realm_id: realm,
+          realm_name: realmName,
+          name: item.name,
+          current_price: item.current_price,
+          volume: item.volume,
+          listing_count: item.listing_count,
+          opportunity_score: item.opportunity_score,
+          risk_level: item.risk_level,
+          reason: item.reason,
+          icon_url: item.icon_url,
+          quality: item.quality,
+          profit_margin: item.profit_margin,
+        });
+      }
 
-      nextWatchlist = [newItem, ...watchlistItems];
+      await loadWatchlist();
+    } catch {
+      setError("Unable to update watchlist.");
+    } finally {
+      setWatchlistLoading(false);
     }
-
-    setWatchlistItems(nextWatchlist);
-    saveStoredWatchlist(nextWatchlist);
   }
 
   useEffect(() => {
-    setWatchlistItems(loadStoredWatchlist());
+    loadWatchlist();
   }, []);
 
   useEffect(() => {
@@ -619,7 +634,8 @@ export default function MarketScanner() {
                       <td className="px-6 py-4 text-right">
                         <button
                           onClick={() => toggleWatchlist(item)}
-                          className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                          disabled={watchlistLoading}
+                          className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
                             watched
                               ? "border-amber-700 bg-amber-950/40 text-amber-400 hover:bg-amber-900/40"
                               : "border-slate-700 bg-slate-950 text-slate-300 hover:border-amber-700 hover:text-amber-400"

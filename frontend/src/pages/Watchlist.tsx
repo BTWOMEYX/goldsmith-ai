@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowUpDown,
+  RefreshCw,
   Search,
   Star,
   Trash2,
 } from "lucide-react";
+import axios from "axios";
 
 type WatchlistItem = {
   id: number;
@@ -22,10 +24,16 @@ type WatchlistItem = {
   profit_margin: number;
   realm_id: number;
   realm_name: string;
-  saved_at: string;
+  saved_at: string | null;
 };
 
-const WATCHLIST_STORAGE_KEY = "goldsmith_watchlist_items";
+type WatchlistResponse = {
+  status: string;
+  item_count: number;
+  items: WatchlistItem[];
+};
+
+const API_BASE_URL = "http://127.0.0.1:8000/api";
 
 const RISK_FILTERS = ["All", "Low", "Medium", "High"];
 
@@ -107,7 +115,11 @@ function formatScore(value: number) {
   return `${value.toFixed(1)}/100`;
 }
 
-function formatSavedDate(value: string) {
+function formatSavedDate(value: string | null) {
+  if (!value) {
+    return "Unknown";
+  }
+
   try {
     return new Intl.DateTimeFormat("en-AU", {
       day: "2-digit",
@@ -120,46 +132,65 @@ function formatSavedDate(value: string) {
   }
 }
 
-function loadStoredWatchlist(): WatchlistItem[] {
-  try {
-    const storedItems = localStorage.getItem(WATCHLIST_STORAGE_KEY);
-
-    if (!storedItems) {
-      return [];
-    }
-
-    return JSON.parse(storedItems) as WatchlistItem[];
-  } catch {
-    return [];
-  }
-}
-
-function saveStoredWatchlist(items: WatchlistItem[]) {
-  localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(items));
-}
-
 export default function Watchlist() {
   const [items, setItems] = useState<WatchlistItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [updating, setUpdating] = useState(false);
+  const [error, setError] = useState("");
+
   const [searchTerm, setSearchTerm] = useState("");
   const [riskFilter, setRiskFilter] = useState("All");
   const [sortMode, setSortMode] = useState("saved-desc");
 
-  function removeItem(itemId: number, realmId: number) {
-    const nextItems = items.filter(
-      (item) => !(item.item_id === itemId && item.realm_id === realmId)
-    );
+  async function loadWatchlist() {
+    try {
+      setLoading(true);
 
-    setItems(nextItems);
-    saveStoredWatchlist(nextItems);
+      const response = await axios.get<WatchlistResponse>(
+        `${API_BASE_URL}/watchlist`
+      );
+
+      setItems(response.data.items ?? []);
+      setError("");
+    } catch {
+      setError("Unable to load backend watchlist.");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function clearWatchlist() {
-    setItems([]);
-    saveStoredWatchlist([]);
+  async function removeItem(itemId: number, realmId: number) {
+    try {
+      setUpdating(true);
+      setError("");
+
+      await axios.delete(`${API_BASE_URL}/watchlist/${realmId}/${itemId}`);
+
+      await loadWatchlist();
+    } catch {
+      setError("Unable to remove item from watchlist.");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  async function clearWatchlist() {
+    try {
+      setUpdating(true);
+      setError("");
+
+      await axios.delete(`${API_BASE_URL}/watchlist`);
+
+      await loadWatchlist();
+    } catch {
+      setError("Unable to clear watchlist.");
+    } finally {
+      setUpdating(false);
+    }
   }
 
   useEffect(() => {
-    setItems(loadStoredWatchlist());
+    loadWatchlist();
   }, []);
 
   const filteredItems = useMemo(() => {
@@ -199,8 +230,8 @@ export default function Watchlist() {
         case "saved-desc":
         default:
           return (
-            new Date(b.saved_at).getTime() -
-            new Date(a.saved_at).getTime()
+            new Date(b.saved_at ?? "").getTime() -
+            new Date(a.saved_at ?? "").getTime()
           );
       }
     });
@@ -247,11 +278,24 @@ export default function Watchlist() {
           </h2>
 
           <p className="mt-1 text-sm text-slate-400">
-            Track the auction opportunities you want to monitor closely.
+            Track auction opportunities saved to the GoldSmith AI backend.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={loadWatchlist}
+            disabled={loading || updating}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-5 py-2 text-sm font-semibold text-slate-200 transition hover:border-slate-600 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw
+              size={16}
+              className={loading ? "animate-spin" : ""}
+            />
+
+            Refresh
+          </button>
+
           <Link
             to="/markets"
             className="rounded-lg bg-amber-500 px-5 py-2 text-sm font-semibold text-black transition hover:bg-amber-400"
@@ -262,7 +306,8 @@ export default function Watchlist() {
           {items.length > 0 && (
             <button
               onClick={clearWatchlist}
-              className="rounded-lg border border-red-800 bg-red-950/40 px-5 py-2 text-sm font-semibold text-red-300 transition hover:bg-red-900/40"
+              disabled={updating}
+              className="rounded-lg border border-red-800 bg-red-950/40 px-5 py-2 text-sm font-semibold text-red-300 transition hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Clear Watchlist
             </button>
@@ -270,12 +315,18 @@ export default function Watchlist() {
         </div>
       </div>
 
+      {error && (
+        <div className="rounded-lg border border-red-800 bg-red-950/60 p-4 text-sm text-red-300">
+          {error}
+        </div>
+      )}
+
       <div className="grid gap-6 md:grid-cols-4">
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
           <p className="text-sm text-slate-400">Watched Items</p>
 
           <h3 className="mt-2 text-4xl font-bold text-white">
-            {items.length}
+            {loading ? "..." : items.length}
           </h3>
 
           <p className="mt-1 text-xs text-slate-500">
@@ -299,7 +350,7 @@ export default function Watchlist() {
           <p className="text-sm text-slate-400">Combined Market Value</p>
 
           <h3 className="mt-2 text-4xl font-bold text-amber-400">
-            {formatGold(totalValue)}
+            {loading ? "..." : formatGold(totalValue)}
           </h3>
         </div>
 
@@ -311,7 +362,7 @@ export default function Watchlist() {
               averageScore
             )}`}
           >
-            {formatScore(averageScore)}
+            {loading ? "..." : formatScore(averageScore)}
           </h3>
 
           <p className="mt-1 text-xs text-slate-500">
@@ -401,7 +452,16 @@ export default function Watchlist() {
             </thead>
 
             <tbody>
-              {filteredItems.length === 0 ? (
+              {loading ? (
+                <tr>
+                  <td
+                    colSpan={8}
+                    className="px-6 py-12 text-center text-slate-500"
+                  >
+                    Loading backend watchlist...
+                  </td>
+                </tr>
+              ) : filteredItems.length === 0 ? (
                 <tr>
                   <td
                     colSpan={8}
@@ -490,7 +550,8 @@ export default function Watchlist() {
                     <td className="px-6 py-4 text-right">
                       <button
                         onClick={() => removeItem(item.item_id, item.realm_id)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-red-900 bg-red-950/30 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-900/40"
+                        disabled={updating}
+                        className="inline-flex items-center gap-2 rounded-lg border border-red-900 bg-red-950/30 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <Trash2 size={14} />
                         Remove

@@ -1,3 +1,4 @@
+@'
 import asyncio
 
 from database import engine
@@ -14,3 +15,4 @@ async def reset_watchlist_table():
 
 if __name__ == "__main__":
     asyncio.run(reset_watchlist_table())
+'@ | Set-Content -Encoding UTF8 reset_watchlist.py
