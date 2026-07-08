@@ -6,12 +6,20 @@ from sqlalchemy import delete
 
 from app.services.blizzard import blizzard_service
 from database import get_db
-from models import TrackedItem
+from models import PriceSnapshot, TrackedItem
 
 router = APIRouter(
     prefix="/api",
     tags=["Sync"],
 )
+
+
+REALM_NAMES = {
+    11: "Illidan",
+    4: "Area 52",
+    12: "Sargeras",
+    53: "Tichondrius",
+}
 
 
 QUALITY_SCORE = {
@@ -174,6 +182,11 @@ async def sync_auctions(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        realm_name = REALM_NAMES.get(
+            connected_realm_id,
+            f"Connected Realm {connected_realm_id}",
+        )
+
         print(
             f"[SYNC] Starting auction sync for connected_realm_id={connected_realm_id}"
         )
@@ -308,22 +321,39 @@ async def sync_auctions(
         await db.flush()
 
         for opportunity in top_opportunities:
-            db.add(
-                TrackedItem(
-                    item_id=opportunity["item_id"],
-                    realm_id=connected_realm_id,
-                    name=opportunity["name"],
-                    current_price=opportunity["price"],
-                    volume=opportunity["volume"],
-                    listing_count=opportunity["listing_count"],
-                    opportunity_score=opportunity["opportunity_score"],
-                    risk_level=opportunity["risk_level"],
-                    reason=opportunity["reason"],
-                    icon_url=opportunity["icon_url"],
-                    quality=opportunity["quality"],
-                    profit_margin=opportunity["opportunity_score"],
-                )
+            tracked_item = TrackedItem(
+                item_id=opportunity["item_id"],
+                realm_id=connected_realm_id,
+                name=opportunity["name"],
+                current_price=opportunity["price"],
+                volume=opportunity["volume"],
+                listing_count=opportunity["listing_count"],
+                opportunity_score=opportunity["opportunity_score"],
+                risk_level=opportunity["risk_level"],
+                reason=opportunity["reason"],
+                icon_url=opportunity["icon_url"],
+                quality=opportunity["quality"],
+                profit_margin=opportunity["opportunity_score"],
             )
+
+            price_snapshot = PriceSnapshot(
+                item_id=opportunity["item_id"],
+                realm_id=connected_realm_id,
+                realm_name=realm_name,
+                name=opportunity["name"],
+                current_price=opportunity["price"],
+                volume=opportunity["volume"],
+                listing_count=opportunity["listing_count"],
+                opportunity_score=opportunity["opportunity_score"],
+                risk_level=opportunity["risk_level"],
+                reason=opportunity["reason"],
+                icon_url=opportunity["icon_url"],
+                quality=opportunity["quality"],
+                profit_margin=opportunity["opportunity_score"],
+            )
+
+            db.add(tracked_item)
+            db.add(price_snapshot)
 
         await db.commit()
 
@@ -331,17 +361,20 @@ async def sync_auctions(
             f"[SYNC] Completed. Items scanned={len(item_stats)}, "
             f"candidates={len(candidates)}, "
             f"metadata_enriched={len(enriched_candidates)}, "
-            f"opportunities={len(top_opportunities)}"
+            f"opportunities={len(top_opportunities)}, "
+            f"snapshots_saved={len(top_opportunities)}"
         )
 
         return {
             "status": "Success",
             "connected_realm_id": connected_realm_id,
+            "realm": realm_name,
             "auctions_downloaded": len(auctions),
             "items_scanned": len(item_stats),
             "candidates_found": len(candidates),
             "metadata_enriched": len(enriched_candidates),
             "opportunities_unlocked": len(top_opportunities),
+            "snapshots_saved": len(top_opportunities),
         }
 
     except Exception as error:
