@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { ArrowUpDown, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
+import {
+  ArrowUpDown,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Star,
+} from "lucide-react";
 
 type TrackedItem = {
   id: number;
@@ -17,6 +23,12 @@ type TrackedItem = {
   profit_margin: number;
 };
 
+type WatchlistItem = TrackedItem & {
+  realm_id: number;
+  realm_name: string;
+  saved_at: string;
+};
+
 type DashboardResponse = {
   status: string;
   connected_realm_id: number;
@@ -24,6 +36,8 @@ type DashboardResponse = {
   item_count: number;
   items: TrackedItem[];
 };
+
+const WATCHLIST_STORAGE_KEY = "goldsmith_watchlist_items";
 
 const REALMS = [
   { id: 11, name: "US - Illidan" },
@@ -123,10 +137,29 @@ function formatScore(value: number) {
   return `${value.toFixed(1)}/100`;
 }
 
+function loadStoredWatchlist(): WatchlistItem[] {
+  try {
+    const storedItems = localStorage.getItem(WATCHLIST_STORAGE_KEY);
+
+    if (!storedItems) {
+      return [];
+    }
+
+    return JSON.parse(storedItems) as WatchlistItem[];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredWatchlist(items: WatchlistItem[]) {
+  localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(items));
+}
+
 export default function MarketScanner() {
   const [realm, setRealm] = useState(11);
   const [realmName, setRealmName] = useState("Illidan");
   const [items, setItems] = useState<TrackedItem[]>([]);
+  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
@@ -170,6 +203,46 @@ export default function MarketScanner() {
       setSyncing(false);
     }
   }
+
+  function isItemWatched(item: TrackedItem) {
+    return watchlistItems.some(
+      (watchlistItem) =>
+        watchlistItem.item_id === item.item_id &&
+        watchlistItem.realm_id === realm
+    );
+  }
+
+  function toggleWatchlist(item: TrackedItem) {
+    const alreadyWatched = isItemWatched(item);
+
+    let nextWatchlist: WatchlistItem[];
+
+    if (alreadyWatched) {
+      nextWatchlist = watchlistItems.filter(
+        (watchlistItem) =>
+          !(
+            watchlistItem.item_id === item.item_id &&
+            watchlistItem.realm_id === realm
+          )
+      );
+    } else {
+      const newItem: WatchlistItem = {
+        ...item,
+        realm_id: realm,
+        realm_name: realmName,
+        saved_at: new Date().toISOString(),
+      };
+
+      nextWatchlist = [newItem, ...watchlistItems];
+    }
+
+    setWatchlistItems(nextWatchlist);
+    saveStoredWatchlist(nextWatchlist);
+  }
+
+  useEffect(() => {
+    setWatchlistItems(loadStoredWatchlist());
+  }, []);
 
   useEffect(() => {
     loadScannerData(realm);
@@ -286,6 +359,7 @@ export default function MarketScanner() {
               size={16}
               className={syncing ? "animate-spin" : ""}
             />
+
             {syncing ? "Syncing..." : "Sync Auctions"}
           </button>
         </div>
@@ -439,6 +513,7 @@ export default function MarketScanner() {
                 <th className="px-6 py-3 text-right font-medium">Listings</th>
                 <th className="px-6 py-3 text-right font-medium">Score</th>
                 <th className="px-6 py-3 text-left font-medium">Risk</th>
+                <th className="px-6 py-3 text-right font-medium">Watch</th>
               </tr>
             </thead>
 
@@ -446,7 +521,7 @@ export default function MarketScanner() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="px-6 py-12 text-center text-slate-500"
                   >
                     Loading scanner data...
@@ -455,90 +530,112 @@ export default function MarketScanner() {
               ) : filteredItems.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="px-6 py-12 text-center text-slate-500"
                   >
                     No matching opportunities found.
                   </td>
                 </tr>
               ) : (
-                filteredItems.map((item) => (
-                  <tr
-                    key={item.id}
-                    className="border-t border-slate-800 transition hover:bg-slate-800/40"
-                    title={item.reason ?? ""}
-                  >
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        {item.icon_url ? (
-                          <img
-                            src={item.icon_url}
-                            alt={item.name}
-                            className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950"
-                          />
-                        ) : (
-                          <div className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950" />
-                        )}
+                filteredItems.map((item) => {
+                  const watched = isItemWatched(item);
 
-                        <div>
-                          <p className="font-semibold text-white">
-                            {item.name}
-                          </p>
+                  return (
+                    <tr
+                      key={item.id}
+                      className="border-t border-slate-800 transition hover:bg-slate-800/40"
+                      title={item.reason ?? ""}
+                    >
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          {item.icon_url ? (
+                            <img
+                              src={item.icon_url}
+                              alt={item.name}
+                              className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950"
+                            />
+                          ) : (
+                            <div className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950" />
+                          )}
 
-                          <p className="text-xs text-slate-500">
-                            Item #{item.item_id}
-                          </p>
+                          <div>
+                            <p className="font-semibold text-white">
+                              {item.name}
+                            </p>
 
-                          <p className="mt-1 max-w-2xl truncate text-xs text-slate-400">
-                            {item.reason}
-                          </p>
+                            <p className="text-xs text-slate-500">
+                              Item #{item.item_id}
+                            </p>
+
+                            <p className="mt-1 max-w-2xl truncate text-xs text-slate-400">
+                              {item.reason}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    </td>
+                      </td>
 
-                    <td className="px-6 py-4">
-                      <span
-                        className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${getQualityClass(
-                          item.quality
-                        )}`}
-                      >
-                        {item.quality ?? "unknown"}
-                      </span>
-                    </td>
+                      <td className="px-6 py-4">
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${getQualityClass(
+                            item.quality
+                          )}`}
+                        >
+                          {item.quality ?? "unknown"}
+                        </span>
+                      </td>
 
-                    <td className="px-6 py-4 text-right font-semibold text-emerald-400">
-                      {formatGold(item.current_price)}
-                    </td>
+                      <td className="px-6 py-4 text-right font-semibold text-emerald-400">
+                        {formatGold(item.current_price)}
+                      </td>
 
-                    <td className="px-6 py-4 text-right font-semibold text-slate-200">
-                      {item.volume.toLocaleString()}
-                    </td>
+                      <td className="px-6 py-4 text-right font-semibold text-slate-200">
+                        {item.volume.toLocaleString()}
+                      </td>
 
-                    <td className="px-6 py-4 text-right text-slate-400">
-                      {item.listing_count.toLocaleString()}
-                    </td>
+                      <td className="px-6 py-4 text-right text-slate-400">
+                        {item.listing_count.toLocaleString()}
+                      </td>
 
-                    <td className="px-6 py-4 text-right">
-                      <span
-                        className={`font-bold ${getScoreClass(
-                          item.opportunity_score
-                        )}`}
-                      >
-                        {formatScore(item.opportunity_score)}
-                      </span>
-                    </td>
+                      <td className="px-6 py-4 text-right">
+                        <span
+                          className={`font-bold ${getScoreClass(
+                            item.opportunity_score
+                          )}`}
+                        >
+                          {formatScore(item.opportunity_score)}
+                        </span>
+                      </td>
 
-                    <td className="px-6 py-4">
-                      <span
-                        className={`rounded-full border px-3 py-1 text-xs font-semibold ${getRiskClass(
-                          item.risk_level
-                        )}`}
-                      >
-                        {item.risk_level}
-                      </span>
-                    </td>
-                  </tr>
-                ))
+                      <td className="px-6 py-4">
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs font-semibold ${getRiskClass(
+                            item.risk_level
+                          )}`}
+                        >
+                          {item.risk_level}
+                        </span>
+                      </td>
+
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => toggleWatchlist(item)}
+                          className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                            watched
+                              ? "border-amber-700 bg-amber-950/40 text-amber-400 hover:bg-amber-900/40"
+                              : "border-slate-700 bg-slate-950 text-slate-300 hover:border-amber-700 hover:text-amber-400"
+                          }`}
+                        >
+                          <Star
+                            size={14}
+                            className={watched ? "fill-current" : ""}
+                          />
+
+                          {watched ? "Watching" : "Watch"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

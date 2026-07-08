@@ -1,8 +1,508 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  ArrowUpDown,
+  Search,
+  Star,
+  Trash2,
+} from "lucide-react";
+
+type WatchlistItem = {
+  id: number;
+  item_id: number;
+  name: string;
+  current_price: number;
+  volume: number;
+  listing_count: number;
+  opportunity_score: number;
+  risk_level: string;
+  reason: string | null;
+  icon_url: string | null;
+  quality: string | null;
+  profit_margin: number;
+  realm_id: number;
+  realm_name: string;
+  saved_at: string;
+};
+
+const WATCHLIST_STORAGE_KEY = "goldsmith_watchlist_items";
+
+const RISK_FILTERS = ["All", "Low", "Medium", "High"];
+
+const SORT_OPTIONS = [
+  { value: "saved-desc", label: "Recently added" },
+  { value: "score-desc", label: "Best score" },
+  { value: "price-desc", label: "Highest price" },
+  { value: "volume-desc", label: "Highest volume" },
+  { value: "risk-asc", label: "Lowest risk" },
+  { value: "name-asc", label: "Item name" },
+];
+
+function getQualityClass(quality: string | null) {
+  switch (quality?.toLowerCase()) {
+    case "poor":
+      return "text-slate-500 border-slate-700 bg-slate-900";
+    case "common":
+      return "text-slate-200 border-slate-600 bg-slate-800";
+    case "uncommon":
+      return "text-green-400 border-green-800 bg-green-950/40";
+    case "rare":
+      return "text-blue-400 border-blue-800 bg-blue-950/40";
+    case "epic":
+      return "text-purple-400 border-purple-800 bg-purple-950/40";
+    case "legendary":
+      return "text-orange-400 border-orange-800 bg-orange-950/40";
+    default:
+      return "text-slate-400 border-slate-700 bg-slate-900";
+  }
+}
+
+function getRiskClass(riskLevel: string) {
+  switch (riskLevel.toLowerCase()) {
+    case "low":
+      return "text-emerald-400 border-emerald-800 bg-emerald-950/40";
+    case "medium":
+      return "text-amber-400 border-amber-800 bg-amber-950/40";
+    case "high":
+      return "text-red-400 border-red-800 bg-red-950/40";
+    default:
+      return "text-slate-400 border-slate-700 bg-slate-900";
+  }
+}
+
+function getScoreClass(score: number) {
+  if (score >= 80) {
+    return "text-emerald-400";
+  }
+
+  if (score >= 60) {
+    return "text-blue-400";
+  }
+
+  if (score >= 40) {
+    return "text-amber-400";
+  }
+
+  return "text-red-400";
+}
+
+function getRiskRank(riskLevel: string) {
+  switch (riskLevel.toLowerCase()) {
+    case "low":
+      return 1;
+    case "medium":
+      return 2;
+    case "high":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+function formatGold(value: number) {
+  return `${Math.round(value).toLocaleString()}g`;
+}
+
+function formatScore(value: number) {
+  return `${value.toFixed(1)}/100`;
+}
+
+function formatSavedDate(value: string) {
+  try {
+    return new Intl.DateTimeFormat("en-AU", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return "Unknown";
+  }
+}
+
+function loadStoredWatchlist(): WatchlistItem[] {
+  try {
+    const storedItems = localStorage.getItem(WATCHLIST_STORAGE_KEY);
+
+    if (!storedItems) {
+      return [];
+    }
+
+    return JSON.parse(storedItems) as WatchlistItem[];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredWatchlist(items: WatchlistItem[]) {
+  localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(items));
+}
+
 export default function Watchlist() {
+  const [items, setItems] = useState<WatchlistItem[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [riskFilter, setRiskFilter] = useState("All");
+  const [sortMode, setSortMode] = useState("saved-desc");
+
+  function removeItem(itemId: number, realmId: number) {
+    const nextItems = items.filter(
+      (item) => !(item.item_id === itemId && item.realm_id === realmId)
+    );
+
+    setItems(nextItems);
+    saveStoredWatchlist(nextItems);
+  }
+
+  function clearWatchlist() {
+    setItems([]);
+    saveStoredWatchlist([]);
+  }
+
+  useEffect(() => {
+    setItems(loadStoredWatchlist());
+  }, []);
+
+  const filteredItems = useMemo(() => {
+    const normalisedSearch = searchTerm.trim().toLowerCase();
+
+    const filtered = items.filter((item) => {
+      const itemRisk = item.risk_level ?? "unknown";
+      const itemQuality = item.quality ?? "unknown";
+
+      const matchesSearch =
+        normalisedSearch.length === 0 ||
+        item.name.toLowerCase().includes(normalisedSearch) ||
+        item.item_id.toString().includes(normalisedSearch) ||
+        item.realm_name.toLowerCase().includes(normalisedSearch) ||
+        itemRisk.toLowerCase().includes(normalisedSearch) ||
+        itemQuality.toLowerCase().includes(normalisedSearch);
+
+      const matchesRisk =
+        riskFilter === "All" ||
+        itemRisk.toLowerCase() === riskFilter.toLowerCase();
+
+      return matchesSearch && matchesRisk;
+    });
+
+    return [...filtered].sort((a, b) => {
+      switch (sortMode) {
+        case "score-desc":
+          return b.opportunity_score - a.opportunity_score;
+        case "price-desc":
+          return b.current_price - a.current_price;
+        case "volume-desc":
+          return b.volume - a.volume;
+        case "risk-asc":
+          return getRiskRank(a.risk_level) - getRiskRank(b.risk_level);
+        case "name-asc":
+          return a.name.localeCompare(b.name);
+        case "saved-desc":
+        default:
+          return (
+            new Date(b.saved_at).getTime() -
+            new Date(a.saved_at).getTime()
+          );
+      }
+    });
+  }, [items, searchTerm, riskFilter, sortMode]);
+
+  const averageScore = useMemo(() => {
+    if (!items.length) {
+      return 0;
+    }
+
+    return (
+      items.reduce((sum, item) => sum + item.opportunity_score, 0) /
+      items.length
+    );
+  }, [items]);
+
+  const totalValue = useMemo(() => {
+    return items.reduce((sum, item) => sum + item.current_price, 0);
+  }, [items]);
+
+  const mediumOrLowRiskCount = useMemo(() => {
+    return items.filter((item) => {
+      const risk = item.risk_level.toLowerCase();
+      return risk === "low" || risk === "medium";
+    }).length;
+  }, [items]);
+
+  const bestItem = useMemo(() => {
+    if (!items.length) {
+      return null;
+    }
+
+    return [...items].sort(
+      (a, b) => b.opportunity_score - a.opportunity_score
+    )[0];
+  }, [items]);
+
   return (
-    <div className="text-white">
-      <h1 className="text-3xl font-bold">Watchlist Scanner</h1>
-      <p className="text-slate-400 mt-2">Coming soon...</p>
+    <div className="space-y-8">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold text-white">
+            Watchlist
+          </h2>
+
+          <p className="mt-1 text-sm text-slate-400">
+            Track the auction opportunities you want to monitor closely.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            to="/markets"
+            className="rounded-lg bg-amber-500 px-5 py-2 text-sm font-semibold text-black transition hover:bg-amber-400"
+          >
+            Add from Scanner
+          </Link>
+
+          {items.length > 0 && (
+            <button
+              onClick={clearWatchlist}
+              className="rounded-lg border border-red-800 bg-red-950/40 px-5 py-2 text-sm font-semibold text-red-300 transition hover:bg-red-900/40"
+            >
+              Clear Watchlist
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-4">
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+          <p className="text-sm text-slate-400">Watched Items</p>
+
+          <h3 className="mt-2 text-4xl font-bold text-white">
+            {items.length}
+          </h3>
+
+          <p className="mt-1 text-xs text-slate-500">
+            {filteredItems.length} currently visible
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+          <p className="text-sm text-slate-400">Best Watched Item</p>
+
+          <h3 className="mt-2 truncate text-lg font-bold text-emerald-400">
+            {bestItem?.name ?? "-"}
+          </h3>
+
+          <p className="mt-1 text-sm text-slate-400">
+            {bestItem ? formatScore(bestItem.opportunity_score) : ""}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+          <p className="text-sm text-slate-400">Combined Market Value</p>
+
+          <h3 className="mt-2 text-4xl font-bold text-amber-400">
+            {formatGold(totalValue)}
+          </h3>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+          <p className="text-sm text-slate-400">Average Score</p>
+
+          <h3
+            className={`mt-2 text-4xl font-bold ${getScoreClass(
+              averageScore
+            )}`}
+          >
+            {formatScore(averageScore)}
+          </h3>
+
+          <p className="mt-1 text-xs text-slate-500">
+            {mediumOrLowRiskCount} lower-risk watched items
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-300">
+          <Star size={16} className="text-amber-400" />
+          Watchlist Controls
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="relative">
+            <Search
+              size={16}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+            />
+
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search watched items..."
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 py-2 pl-10 pr-4 text-sm text-white outline-none transition focus:border-amber-500"
+            />
+          </div>
+
+          <select
+            value={riskFilter}
+            onChange={(event) => setRiskFilter(event.target.value)}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-100 outline-none transition focus:border-amber-500"
+          >
+            {RISK_FILTERS.map((risk) => (
+              <option key={risk} value={risk}>
+                Risk: {risk}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value)}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-100 outline-none transition focus:border-amber-500"
+          >
+            {SORT_OPTIONS.map((sortOption) => (
+              <option key={sortOption.value} value={sortOption.value}>
+                Sort: {sortOption.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+        <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+          <div>
+            <h2 className="text-xl font-semibold text-white">
+              Watched Opportunities
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-400">
+              Saved items from the Market Scanner.
+            </p>
+          </div>
+
+          <span className="flex items-center gap-2 rounded-full border border-amber-800 bg-amber-950/50 px-3 py-1 text-xs font-semibold text-amber-400">
+            <ArrowUpDown size={13} />
+            {filteredItems.length} items
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-950 text-slate-400">
+              <tr>
+                <th className="px-6 py-3 text-left font-medium">Item</th>
+                <th className="px-6 py-3 text-left font-medium">Realm</th>
+                <th className="px-6 py-3 text-left font-medium">Quality</th>
+                <th className="px-6 py-3 text-right font-medium">Price</th>
+                <th className="px-6 py-3 text-right font-medium">Score</th>
+                <th className="px-6 py-3 text-left font-medium">Risk</th>
+                <th className="px-6 py-3 text-right font-medium">Saved</th>
+                <th className="px-6 py-3 text-right font-medium">Remove</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {filteredItems.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={8}
+                    className="px-6 py-12 text-center text-slate-500"
+                  >
+                    No watched items yet. Add opportunities from the Market Scanner.
+                  </td>
+                </tr>
+              ) : (
+                filteredItems.map((item) => (
+                  <tr
+                    key={`${item.realm_id}-${item.item_id}`}
+                    className="border-t border-slate-800 transition hover:bg-slate-800/40"
+                    title={item.reason ?? ""}
+                  >
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        {item.icon_url ? (
+                          <img
+                            src={item.icon_url}
+                            alt={item.name}
+                            className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950"
+                          />
+                        ) : (
+                          <div className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950" />
+                        )}
+
+                        <div>
+                          <p className="font-semibold text-white">
+                            {item.name}
+                          </p>
+
+                          <p className="text-xs text-slate-500">
+                            Item #{item.item_id} · {item.listing_count} listings
+                          </p>
+
+                          <p className="mt-1 max-w-xl truncate text-xs text-slate-400">
+                            {item.reason}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="px-6 py-4 text-slate-300">
+                      {item.realm_name}
+                    </td>
+
+                    <td className="px-6 py-4">
+                      <span
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${getQualityClass(
+                          item.quality
+                        )}`}
+                      >
+                        {item.quality ?? "unknown"}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4 text-right font-semibold text-emerald-400">
+                      {formatGold(item.current_price)}
+                    </td>
+
+                    <td className="px-6 py-4 text-right">
+                      <span
+                        className={`font-bold ${getScoreClass(
+                          item.opportunity_score
+                        )}`}
+                      >
+                        {formatScore(item.opportunity_score)}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4">
+                      <span
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold ${getRiskClass(
+                          item.risk_level
+                        )}`}
+                      >
+                        {item.risk_level}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4 text-right text-xs text-slate-500">
+                      {formatSavedDate(item.saved_at)}
+                    </td>
+
+                    <td className="px-6 py-4 text-right">
+                      <button
+                        onClick={() => removeItem(item.item_id, item.realm_id)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-red-900 bg-red-950/30 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-900/40"
+                      >
+                        <Trash2 size={14} />
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
