@@ -116,25 +116,6 @@ const SORT_OPTIONS = [
   { value: "name-asc", label: "Item name" },
 ];
 
-function getQualityClass(quality: string | null) {
-  switch (quality?.toLowerCase()) {
-    case "poor":
-      return "text-slate-500 border-slate-700 bg-slate-900";
-    case "common":
-      return "text-slate-200 border-slate-600 bg-slate-800";
-    case "uncommon":
-      return "text-green-400 border-green-800 bg-green-950/40";
-    case "rare":
-      return "text-blue-400 border-blue-800 bg-blue-950/40";
-    case "epic":
-      return "text-purple-400 border-purple-800 bg-purple-950/40";
-    case "legendary":
-      return "text-orange-400 border-orange-800 bg-orange-950/40";
-    default:
-      return "text-slate-400 border-slate-700 bg-slate-900";
-  }
-}
-
 function getRiskClass(riskLevel: string) {
   switch (riskLevel.toLowerCase()) {
     case "low":
