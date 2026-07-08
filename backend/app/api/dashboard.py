@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from app.utils.realms import get_realm_display_name
 from database import get_db
 from models import TrackedItem
 
@@ -10,52 +11,56 @@ router = APIRouter(
     tags=["Dashboard"],
 )
 
-REALM_NAMES = {
-    11: "Illidan",
-    4: "Area 52",
-    12: "Sargeras",
-    53: "Tichondrius",
-}
+
+def serialize_tracked_item(item: TrackedItem) -> dict:
+    return {
+        "id": item.id,
+        "item_id": item.item_id,
+        "realm_id": item.realm_id,
+        "name": item.name,
+        "current_price": item.current_price,
+        "volume": item.volume,
+        "listing_count": item.listing_count,
+        "opportunity_score": item.opportunity_score,
+        "risk_level": item.risk_level,
+        "reason": item.reason,
+        "icon_url": item.icon_url,
+        "quality": item.quality,
+        "profit_margin": item.profit_margin,
+        "created_at": item.created_at.isoformat()
+        if item.created_at
+        else None,
+    }
 
 
 @router.get("/dashboard")
-async def get_dashboard_data(
+async def get_dashboard(
     connected_realm_id: int = Query(default=11),
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        realm_name = await get_realm_display_name(connected_realm_id)
+
         result = await db.execute(
             select(TrackedItem)
             .where(TrackedItem.realm_id == connected_realm_id)
-            .order_by(TrackedItem.opportunity_score.desc())
+            .order_by(
+                TrackedItem.opportunity_score.desc(),
+                TrackedItem.volume.desc(),
+                TrackedItem.current_price.desc(),
+            )
         )
 
-        items = result.scalars().all()
+        tracked_items = result.scalars().all()
 
         return {
             "status": "Success",
             "connected_realm_id": connected_realm_id,
-            "realm": REALM_NAMES.get(
-                connected_realm_id,
-                f"Connected Realm {connected_realm_id}",
-            ),
-            "item_count": len(items),
+            "realm": realm_name,
+            "item_count": len(tracked_items),
             "items": [
-                {
-                    "id": item.id,
-                    "item_id": item.item_id,
-                    "name": item.name,
-                    "current_price": item.current_price,
-                    "volume": item.volume,
-                    "listing_count": item.listing_count,
-                    "opportunity_score": item.opportunity_score,
-                    "risk_level": item.risk_level,
-                    "reason": item.reason,
-                    "icon_url": item.icon_url,
-                    "quality": item.quality,
-                    "profit_margin": item.profit_margin,
-                }
-                for item in items
+                serialize_tracked_item(item)
+                for item in tracked_items
             ],
         }
 
@@ -63,5 +68,8 @@ async def get_dashboard_data(
         return {
             "status": "Error",
             "connected_realm_id": connected_realm_id,
+            "realm": f"Connected Realm {connected_realm_id}",
+            "item_count": 0,
+            "items": [],
             "error": str(error),
         }

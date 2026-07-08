@@ -178,6 +178,14 @@ export default function MarketScanner() {
   const [riskFilter, setRiskFilter] = useState("All");
   const [sortMode, setSortMode] = useState("score-desc");
 
+  async function loadWatchlistOnly() {
+    const response = await axios.get<WatchlistResponse>(
+      `${API_BASE_URL}/watchlist`
+    );
+
+    setWatchlistItems(response.data.items ?? []);
+  }
+
   async function loadMarketData(realmId: number) {
     try {
       setLoading(true);
@@ -238,7 +246,7 @@ export default function MarketScanner() {
         profit_margin: item.profit_margin,
       });
 
-      await loadMarketData(realm);
+      await loadWatchlistOnly();
     } catch {
       setError("Unable to add item to watchlist.");
     } finally {
@@ -253,7 +261,7 @@ export default function MarketScanner() {
 
       await axios.delete(`${API_BASE_URL}/watchlist/${realm}/${item.item_id}`);
 
-      await loadMarketData(realm);
+      await loadWatchlistOnly();
     } catch {
       setError("Unable to remove item from watchlist.");
     } finally {
@@ -348,9 +356,7 @@ export default function MarketScanner() {
     <div className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-white">
-            Market Scanner
-          </h2>
+          <h2 className="text-xl font-semibold text-white">Market Scanner</h2>
 
           <p className="mt-1 text-sm text-slate-400">
             Scan connected-realm auction opportunities, filter by risk and save
@@ -362,27 +368,23 @@ export default function MarketScanner() {
           <RealmSelect value={realm} onChange={setRealm} />
 
           <button
+            type="button"
             onClick={() => loadMarketData(realm)}
             disabled={loading || syncing}
             className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-5 py-2 text-sm font-semibold text-slate-200 transition hover:border-slate-600 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RefreshCw
-              size={16}
-              className={loading ? "animate-spin" : ""}
-            />
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
 
             Refresh
           </button>
 
           <button
+            type="button"
             onClick={syncRealm}
             disabled={syncing}
             className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-5 py-2 text-sm font-semibold text-black transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <Activity
-              size={16}
-              className={syncing ? "animate-pulse" : ""}
-            />
+            <Activity size={16} className={syncing ? "animate-pulse" : ""} />
 
             {syncing ? "Syncing..." : "Sync Auctions"}
           </button>
@@ -649,6 +651,7 @@ export default function MarketScanner() {
                       <td className="px-6 py-4 text-right">
                         {isWatched ? (
                           <button
+                            type="button"
                             onClick={() => removeFromWatchlist(item)}
                             disabled={updatingWatchlist}
                             className="inline-flex items-center gap-2 rounded-lg border border-red-900 bg-red-950/30 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-60"
@@ -658,6 +661,7 @@ export default function MarketScanner() {
                           </button>
                         ) : (
                           <button
+                            type="button"
                             onClick={() => addToWatchlist(item)}
                             disabled={updatingWatchlist}
                             className="inline-flex items-center gap-2 rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-900/40 disabled:cursor-not-allowed disabled:opacity-60"
@@ -687,9 +691,8 @@ export default function MarketScanner() {
               </h3>
 
               <p className="mt-1 text-sm text-slate-400">
-                This page now uses the live Blizzard realm selector. Individual
-                realm names can be selected even when they share the same
-                connected auction house.
+                Watchlist actions now update without rebuilding the full page,
+                so your scroll position should stay where it is.
               </p>
             </div>
           </div>

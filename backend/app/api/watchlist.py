@@ -4,6 +4,7 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from app.utils.realms import get_realm_display_name
 from database import get_db
 from models import WatchlistItem
 
@@ -17,29 +18,26 @@ class WatchlistItemPayload(BaseModel):
     item_id: int
     realm_id: int
     realm_name: str
-
     name: str
     current_price: float
-
-    volume: int = 0
-    listing_count: int = 0
-
-    opportunity_score: float = 0
-    risk_level: str = "Unknown"
+    volume: int
+    listing_count: int
+    opportunity_score: float
+    risk_level: str
     reason: str | None = None
-
     icon_url: str | None = None
     quality: str | None = None
-
     profit_margin: float = 0
 
 
-def serialize_watchlist_item(item: WatchlistItem) -> dict:
+async def serialize_watchlist_item(item: WatchlistItem) -> dict:
+    display_realm_name = await get_realm_display_name(item.realm_id)
+
     return {
         "id": item.id,
         "item_id": item.item_id,
         "realm_id": item.realm_id,
-        "realm_name": item.realm_name,
+        "realm_name": display_realm_name,
         "name": item.name,
         "current_price": item.current_price,
         "volume": item.volume,
@@ -50,54 +48,61 @@ def serialize_watchlist_item(item: WatchlistItem) -> dict:
         "icon_url": item.icon_url,
         "quality": item.quality,
         "profit_margin": item.profit_margin,
-        "saved_at": item.created_at.isoformat() if item.created_at else None,
+        "saved_at": item.created_at.isoformat()
+        if item.created_at
+        else None,
     }
 
 
 @router.get("/watchlist")
-async def get_watchlist(
-    db: AsyncSession = Depends(get_db),
-):
+async def get_watchlist(db: AsyncSession = Depends(get_db)):
     try:
         result = await db.execute(
-            select(WatchlistItem).order_by(WatchlistItem.created_at.desc())
+            select(WatchlistItem)
+            .order_by(WatchlistItem.created_at.desc())
         )
 
         items = result.scalars().all()
 
+        serialized_items = [
+            await serialize_watchlist_item(item)
+            for item in items
+        ]
+
         return {
             "status": "Success",
-            "item_count": len(items),
-            "items": [
-                serialize_watchlist_item(item)
-                for item in items
-            ],
+            "item_count": len(serialized_items),
+            "items": serialized_items,
         }
 
     except Exception as error:
         return {
             "status": "Error",
+            "item_count": 0,
+            "items": [],
             "error": str(error),
         }
 
 
 @router.post("/watchlist")
-async def add_watchlist_item(
+async def add_to_watchlist(
     payload: WatchlistItemPayload,
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        result = await db.execute(
+        display_realm_name = await get_realm_display_name(payload.realm_id)
+
+        existing_result = await db.execute(
             select(WatchlistItem).where(
                 WatchlistItem.item_id == payload.item_id,
                 WatchlistItem.realm_id == payload.realm_id,
             )
         )
 
-        existing_item = result.scalar_one_or_none()
+        existing_item = existing_result.scalars().first()
 
         if existing_item:
-            existing_item.realm_name = payload.realm_name
+            existing_item.realm_name = display_realm_name
             existing_item.name = payload.name
             existing_item.current_price = payload.current_price
             existing_item.volume = payload.volume
@@ -113,14 +118,15 @@ async def add_watchlist_item(
             await db.refresh(existing_item)
 
             return {
-                "status": "Updated",
-                "item": serialize_watchlist_item(existing_item),
+                "status": "Success",
+                "message": "Watchlist item updated.",
+                "item": await serialize_watchlist_item(existing_item),
             }
 
         new_item = WatchlistItem(
             item_id=payload.item_id,
             realm_id=payload.realm_id,
-            realm_name=payload.realm_name,
+            realm_name=display_realm_name,
             name=payload.name,
             current_price=payload.current_price,
             volume=payload.volume,
@@ -139,8 +145,9 @@ async def add_watchlist_item(
         await db.refresh(new_item)
 
         return {
-            "status": "Saved",
-            "item": serialize_watchlist_item(new_item),
+            "status": "Success",
+            "message": "Item added to watchlist.",
+            "item": await serialize_watchlist_item(new_item),
         }
 
     except Exception as error:
@@ -148,16 +155,49 @@ async def add_watchlist_item(
 
         return {
             "status": "Error",
+            "message": "Unable to add item to watchlist.",
+            "error": str(error),
+        }
+
+
+@router.delete("/watchlist/{realm_id}/{item_id}")
+async def remove_from_watchlist(
+    realm_id: int,
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        await db.execute(
+            delete(WatchlistItem).where(
+                WatchlistItem.realm_id == realm_id,
+                WatchlistItem.item_id == item_id,
+            )
+        )
+
+        await db.commit()
+
+        return {
+            "status": "Success",
+            "message": "Item removed from watchlist.",
+            "realm_id": realm_id,
+            "item_id": item_id,
+        }
+
+    except Exception as error:
+        await db.rollback()
+
+        return {
+            "status": "Error",
+            "message": "Unable to remove item from watchlist.",
             "error": str(error),
         }
 
 
 @router.delete("/watchlist")
-async def clear_watchlist(
-    db: AsyncSession = Depends(get_db),
-):
+async def clear_watchlist(db: AsyncSession = Depends(get_db)):
     try:
         await db.execute(delete(WatchlistItem))
+
         await db.commit()
 
         return {
@@ -170,46 +210,6 @@ async def clear_watchlist(
 
         return {
             "status": "Error",
-            "error": str(error),
-        }
-
-
-@router.delete("/watchlist/{realm_id}/{item_id}")
-async def remove_watchlist_item(
-    realm_id: int,
-    item_id: int,
-    db: AsyncSession = Depends(get_db),
-):
-    try:
-        result = await db.execute(
-            select(WatchlistItem).where(
-                WatchlistItem.item_id == item_id,
-                WatchlistItem.realm_id == realm_id,
-            )
-        )
-
-        item = result.scalar_one_or_none()
-
-        if not item:
-            return {
-                "status": "Not Found",
-                "message": "Item was not in the watchlist.",
-            }
-
-        await db.delete(item)
-        await db.commit()
-
-        return {
-            "status": "Success",
-            "message": "Item removed from watchlist.",
-            "item_id": item_id,
-            "realm_id": realm_id,
-        }
-
-    except Exception as error:
-        await db.rollback()
-
-        return {
-            "status": "Error",
+            "message": "Unable to clear watchlist.",
             "error": str(error),
         }
