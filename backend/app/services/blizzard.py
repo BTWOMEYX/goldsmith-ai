@@ -110,6 +110,104 @@ class BlizzardAPIService:
         )
 
         return data
+    async def get_item_data(self, item_id: int) -> Dict[str, Any]:
+        token = await self.get_token()
 
+        url = (
+            f"https://{self.region}.api.blizzard.com"
+            f"/data/wow/item/{item_id}"
+        )
+
+        params = {
+            "namespace": f"static-{self.region}",
+            "locale": self.locale,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                url,
+                params=params,
+                headers=headers,
+            )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Blizzard item request failed for item_id={item_id}. "
+                f"Status: {response.status_code}. Response: {response.text[:500]}"
+            )
+
+        return response.json()
+
+    async def get_item_media(self, item_id: int) -> Dict[str, Any]:
+        token = await self.get_token()
+
+        url = (
+            f"https://{self.region}.api.blizzard.com"
+            f"/data/wow/media/item/{item_id}"
+        )
+
+        params = {
+            "namespace": f"static-{self.region}",
+            "locale": self.locale,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                url,
+                params=params,
+                headers=headers,
+            )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Blizzard item media request failed for item_id={item_id}. "
+                f"Status: {response.status_code}. Response: {response.text[:500]}"
+            )
+
+        return response.json()
+
+    async def get_item_display_data(self, item_id: int) -> Dict[str, Any]:
+        item_name = f"Item {item_id}"
+        item_quality = "unknown"
+        icon_url = None
+
+        try:
+            item_data = await self.get_item_data(item_id)
+
+            item_name = item_data.get("name", item_name)
+
+            quality_data = item_data.get("quality", {})
+            item_quality = quality_data.get("type", "unknown").lower()
+
+        except Exception as error:
+            print(f"[ITEM DATA WARNING] Could not fetch item data for {item_id}: {error}")
+
+        try:
+            media_data = await self.get_item_media(item_id)
+
+            assets = media_data.get("assets", [])
+
+            for asset in assets:
+                if asset.get("key") == "icon":
+                    icon_url = asset.get("value")
+                    break
+
+        except Exception as error:
+            print(f"[ITEM MEDIA WARNING] Could not fetch item media for {item_id}: {error}")
+
+        return {
+            "item_id": item_id,
+            "name": item_name,
+            "quality": item_quality,
+            "icon_url": icon_url,
+        }
 
 blizzard_service = BlizzardAPIService()

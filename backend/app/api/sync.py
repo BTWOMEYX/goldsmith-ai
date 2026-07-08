@@ -11,36 +11,6 @@ router = APIRouter(
     tags=["Sync"],
 )
 
-LOCAL_ITEM_REGISTRY = {
-    240161: "Null Lotus",
-    128313: "Furious Potion",
-    219931: "Bismuth Ore (Tier 3)",
-    219933: "Ironclaw Ore (Tier 3)",
-    225369: "Gilded Alloy",
-    15065: "Ancient Leather",
-    219932: "Aqirite Ore (Tier 3)",
-    245772: "Arkhana Crystallite",
-    225449: "Sample Premium Alloy",
-    173202: "Shadowghast Ingot",
-    173204: "Elethium Ore",
-}
-
-
-def resolve_item_name(item_id: int) -> str:
-    if item_id in LOCAL_ITEM_REGISTRY:
-        return LOCAL_ITEM_REGISTRY[item_id]
-
-    if 217000 <= item_id <= 217999:
-        return f"Algari Competitor Asset {item_id}"
-
-    if 260000 <= item_id <= 261000:
-        return f"Algari Competitor Asset {item_id}"
-
-    if item_id > 210000:
-        return f"Khaz Algar Trade Gear {item_id}"
-
-    return f"Premium Speculative Asset {item_id}"
-
 
 @router.post("/sync-auctions")
 async def sync_auctions(
@@ -87,10 +57,8 @@ async def sync_auctions(
                 continue
 
             price_gold = raw_price / 10000
-
             quantity = auction.get("quantity", 1)
 
-            # Filter out junk listings and absurd outliers
             if 5.0 <= price_gold <= 200000.0:
                 if item_id not in item_prices or price_gold < item_prices[item_id]:
                     item_prices[item_id] = price_gold
@@ -108,7 +76,6 @@ async def sync_auctions(
                 valuable_items.append(
                     {
                         "item_id": item_id,
-                        "name": resolve_item_name(item_id),
                         "price": price,
                         "volume": volume,
                         "score": estimated_profit,
@@ -131,13 +98,19 @@ async def sync_auctions(
         await db.flush()
 
         for opportunity in top_opportunities:
+            item_id = opportunity["item_id"]
+
+            display_data = await blizzard_service.get_item_display_data(item_id)
+
             db.add(
                 TrackedItem(
-                    item_id=opportunity["item_id"],
+                    item_id=item_id,
                     realm_id=connected_realm_id,
-                    name=opportunity["name"],
+                    name=display_data["name"],
                     current_price=opportunity["price"],
                     profit_margin=opportunity["score"],
+                    icon_url=display_data["icon_url"],
+                    quality=display_data["quality"],
                 )
             )
 

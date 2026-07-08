@@ -47,6 +47,8 @@ async def get_dashboard_data(
                     "name": item.name,
                     "current_price": item.current_price,
                     "profit_margin": item.profit_margin,
+                    "icon_url": item.icon_url,
+                    "quality": item.quality,
                 }
                 for item in items
             ],
