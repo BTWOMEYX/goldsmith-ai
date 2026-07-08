@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
-  ArrowUpDown,
+  Activity,
+  CheckCircle2,
+  Eye,
   RefreshCw,
   Search,
   SlidersHorizontal,
   Star,
+  Trash2,
 } from "lucide-react";
 
-type TrackedItem = {
+import RealmSelect from "../components/RealmSelect";
+
+type MarketItem = {
   id: number;
   item_id: number;
   name: string;
@@ -23,18 +28,30 @@ type TrackedItem = {
   profit_margin: number;
 };
 
-type WatchlistItem = TrackedItem & {
-  realm_id: number;
-  realm_name: string;
-  saved_at: string | null;
-};
-
 type DashboardResponse = {
   status: string;
   connected_realm_id: number;
   realm: string;
   item_count: number;
-  items: TrackedItem[];
+  items: MarketItem[];
+};
+
+type WatchlistItem = {
+  id: number;
+  item_id: number;
+  realm_id: number;
+  realm_name: string;
+  name: string;
+  current_price: number;
+  volume: number;
+  listing_count: number;
+  opportunity_score: number;
+  risk_level: string;
+  reason: string | null;
+  icon_url: string | null;
+  quality: string | null;
+  profit_margin: number;
+  saved_at: string | null;
 };
 
 type WatchlistResponse = {
@@ -44,13 +61,6 @@ type WatchlistResponse = {
 };
 
 const API_BASE_URL = "http://127.0.0.1:8000/api";
-
-const REALMS = [
-  { id: 11, name: "US - Illidan" },
-  { id: 4, name: "US - Area 52" },
-  { id: 12, name: "US - Sargeras" },
-  { id: 53, name: "US - Tichondrius" },
-];
 
 const QUALITY_FILTERS = [
   "All",
@@ -63,11 +73,12 @@ const QUALITY_FILTERS = [
   "Unknown",
 ];
 
-const RISK_FILTERS = ["All", "Low", "Medium", "High"];
+const RISK_FILTERS = ["All", "Low", "Medium", "High", "Unknown"];
 
 const SORT_OPTIONS = [
   { value: "score-desc", label: "Best score" },
   { value: "price-desc", label: "Highest price" },
+  { value: "price-asc", label: "Lowest price" },
   { value: "volume-desc", label: "Highest volume" },
   { value: "listings-desc", label: "Most listings" },
   { value: "risk-asc", label: "Lowest risk" },
@@ -135,7 +146,11 @@ function getRiskRank(riskLevel: string) {
   }
 }
 
-function formatGold(value: number) {
+function formatGold(value: number | null) {
+  if (value === null) {
+    return "-";
+  }
+
   return `${Math.round(value).toLocaleString()}g`;
 }
 
@@ -143,14 +158,19 @@ function formatScore(value: number) {
   return `${value.toFixed(1)}/100`;
 }
 
+function getWatchlistKey(realmId: number, itemId: number) {
+  return `${realmId}-${itemId}`;
+}
+
 export default function MarketScanner() {
   const [realm, setRealm] = useState(11);
   const [realmName, setRealmName] = useState("Illidan");
-  const [items, setItems] = useState<TrackedItem[]>([]);
+  const [items, setItems] = useState<MarketItem[]>([]);
   const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [watchlistLoading, setWatchlistLoading] = useState(false);
+  const [updatingWatchlist, setUpdatingWatchlist] = useState(false);
   const [error, setError] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -158,37 +178,25 @@ export default function MarketScanner() {
   const [riskFilter, setRiskFilter] = useState("All");
   const [sortMode, setSortMode] = useState("score-desc");
 
-  async function loadScannerData(realmId: number) {
+  async function loadMarketData(realmId: number) {
     try {
       setLoading(true);
 
-      const response = await axios.get<DashboardResponse>(
-        `${API_BASE_URL}/dashboard?connected_realm_id=${realmId}`
-      );
+      const [dashboardResponse, watchlistResponse] = await Promise.all([
+        axios.get<DashboardResponse>(
+          `${API_BASE_URL}/dashboard?connected_realm_id=${realmId}`
+        ),
+        axios.get<WatchlistResponse>(`${API_BASE_URL}/watchlist`),
+      ]);
 
-      setRealmName(response.data.realm);
-      setItems(response.data.items ?? []);
+      setRealmName(dashboardResponse.data.realm);
+      setItems(dashboardResponse.data.items ?? []);
+      setWatchlistItems(watchlistResponse.data.items ?? []);
       setError("");
     } catch {
-      setError("Unable to connect to backend.");
+      setError("Unable to load market scanner data.");
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function loadWatchlist() {
-    try {
-      setWatchlistLoading(true);
-
-      const response = await axios.get<WatchlistResponse>(
-        `${API_BASE_URL}/watchlist`
-      );
-
-      setWatchlistItems(response.data.items ?? []);
-    } catch {
-      setError("Unable to load backend watchlist.");
-    } finally {
-      setWatchlistLoading(false);
     }
   }
 
@@ -201,8 +209,7 @@ export default function MarketScanner() {
         `${API_BASE_URL}/sync-auctions?connected_realm_id=${realm}`
       );
 
-      await loadScannerData(realm);
-      await loadWatchlist();
+      await loadMarketData(realm);
     } catch {
       setError("Auction sync failed.");
     } finally {
@@ -210,58 +217,61 @@ export default function MarketScanner() {
     }
   }
 
-  function isItemWatched(item: TrackedItem) {
-    return watchlistItems.some(
-      (watchlistItem) =>
-        watchlistItem.item_id === item.item_id &&
-        watchlistItem.realm_id === realm
-    );
-  }
-
-  async function toggleWatchlist(item: TrackedItem) {
+  async function addToWatchlist(item: MarketItem) {
     try {
-      setWatchlistLoading(true);
+      setUpdatingWatchlist(true);
       setError("");
 
-      const alreadyWatched = isItemWatched(item);
+      await axios.post(`${API_BASE_URL}/watchlist`, {
+        item_id: item.item_id,
+        realm_id: realm,
+        realm_name: realmName,
+        name: item.name,
+        current_price: item.current_price,
+        volume: item.volume,
+        listing_count: item.listing_count,
+        opportunity_score: item.opportunity_score,
+        risk_level: item.risk_level,
+        reason: item.reason,
+        icon_url: item.icon_url,
+        quality: item.quality,
+        profit_margin: item.profit_margin,
+      });
 
-      if (alreadyWatched) {
-        await axios.delete(
-          `${API_BASE_URL}/watchlist/${realm}/${item.item_id}`
-        );
-      } else {
-        await axios.post(`${API_BASE_URL}/watchlist`, {
-          item_id: item.item_id,
-          realm_id: realm,
-          realm_name: realmName,
-          name: item.name,
-          current_price: item.current_price,
-          volume: item.volume,
-          listing_count: item.listing_count,
-          opportunity_score: item.opportunity_score,
-          risk_level: item.risk_level,
-          reason: item.reason,
-          icon_url: item.icon_url,
-          quality: item.quality,
-          profit_margin: item.profit_margin,
-        });
-      }
-
-      await loadWatchlist();
+      await loadMarketData(realm);
     } catch {
-      setError("Unable to update watchlist.");
+      setError("Unable to add item to watchlist.");
     } finally {
-      setWatchlistLoading(false);
+      setUpdatingWatchlist(false);
+    }
+  }
+
+  async function removeFromWatchlist(item: MarketItem) {
+    try {
+      setUpdatingWatchlist(true);
+      setError("");
+
+      await axios.delete(`${API_BASE_URL}/watchlist/${realm}/${item.item_id}`);
+
+      await loadMarketData(realm);
+    } catch {
+      setError("Unable to remove item from watchlist.");
+    } finally {
+      setUpdatingWatchlist(false);
     }
   }
 
   useEffect(() => {
-    loadWatchlist();
-  }, []);
-
-  useEffect(() => {
-    loadScannerData(realm);
+    loadMarketData(realm);
   }, [realm]);
+
+  const watchedKeys = useMemo(() => {
+    return new Set(
+      watchlistItems.map((watchlistItem) =>
+        getWatchlistKey(watchlistItem.realm_id, watchlistItem.item_id)
+      )
+    );
+  }, [watchlistItems]);
 
   const filteredItems = useMemo(() => {
     const normalisedSearch = searchTerm.trim().toLowerCase();
@@ -292,6 +302,8 @@ export default function MarketScanner() {
       switch (sortMode) {
         case "price-desc":
           return b.current_price - a.current_price;
+        case "price-asc":
+          return a.current_price - b.current_price;
         case "volume-desc":
           return b.volume - a.volume;
         case "listings-desc":
@@ -307,36 +319,29 @@ export default function MarketScanner() {
     });
   }, [items, searchTerm, qualityFilter, riskFilter, sortMode]);
 
-  const averageScore = useMemo(() => {
-    if (!filteredItems.length) {
-      return 0;
-    }
-
-    return (
-      filteredItems.reduce((sum, item) => sum + item.opportunity_score, 0) /
-      filteredItems.length
-    );
-  }, [filteredItems]);
-
-  const totalVolume = useMemo(() => {
-    return filteredItems.reduce((sum, item) => sum + item.volume, 0);
-  }, [filteredItems]);
-
   const bestItem = useMemo(() => {
-    if (!filteredItems.length) {
+    if (!items.length) {
       return null;
     }
 
-    return [...filteredItems].sort(
+    return [...items].sort(
       (a, b) => b.opportunity_score - a.opportunity_score
     )[0];
-  }, [filteredItems]);
+  }, [items]);
 
-  const lowOrMediumRiskCount = useMemo(() => {
-    return filteredItems.filter((item) => {
-      const risk = item.risk_level.toLowerCase();
-      return risk === "low" || risk === "medium";
-    }).length;
+  const lowRiskCount = useMemo(() => {
+    return items.filter((item) => item.risk_level.toLowerCase() === "low")
+      .length;
+  }, [items]);
+
+  const watchedVisibleCount = useMemo(() => {
+    return filteredItems.filter((item) =>
+      watchedKeys.has(getWatchlistKey(realm, item.item_id))
+    ).length;
+  }, [filteredItems, watchedKeys, realm]);
+
+  const totalVisibleValue = useMemo(() => {
+    return filteredItems.reduce((sum, item) => sum + item.current_price, 0);
   }, [filteredItems]);
 
   return (
@@ -348,31 +353,35 @@ export default function MarketScanner() {
           </h2>
 
           <p className="mt-1 text-sm text-slate-400">
-            Search, filter and sort live opportunities from {realmName}.
+            Scan connected-realm auction opportunities, filter by risk and save
+            targets to your watchlist.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <select
-            value={realm}
-            onChange={(event) => setRealm(Number(event.target.value))}
-            className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 outline-none transition hover:border-slate-600 focus:border-amber-500"
+          <RealmSelect value={realm} onChange={setRealm} />
+
+          <button
+            onClick={() => loadMarketData(realm)}
+            disabled={loading || syncing}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-5 py-2 text-sm font-semibold text-slate-200 transition hover:border-slate-600 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {REALMS.map((realmOption) => (
-              <option key={realmOption.id} value={realmOption.id}>
-                {realmOption.name}
-              </option>
-            ))}
-          </select>
+            <RefreshCw
+              size={16}
+              className={loading ? "animate-spin" : ""}
+            />
+
+            Refresh
+          </button>
 
           <button
             onClick={syncRealm}
             disabled={syncing}
-            className="flex items-center gap-2 rounded-lg bg-amber-500 px-5 py-2 text-sm font-semibold text-black transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-5 py-2 text-sm font-semibold text-black transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RefreshCw
+            <Activity
               size={16}
-              className={syncing ? "animate-spin" : ""}
+              className={syncing ? "animate-pulse" : ""}
             />
 
             {syncing ? "Syncing..." : "Sync Auctions"}
@@ -388,19 +397,31 @@ export default function MarketScanner() {
 
       <div className="grid gap-6 md:grid-cols-4">
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Visible Results</p>
+          <p className="text-sm text-slate-400">Realm</p>
 
-          <h3 className="mt-2 text-4xl font-bold text-white">
-            {loading ? "..." : filteredItems.length}
+          <h3 className="mt-2 truncate text-2xl font-bold text-white">
+            {realmName}
           </h3>
 
           <p className="mt-1 text-xs text-slate-500">
-            From {items.length} tracked opportunities
+            Connected Realm #{realm}
           </p>
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Best Match</p>
+          <p className="text-sm text-slate-400">Scanner Results</p>
+
+          <h3 className="mt-2 text-4xl font-bold text-blue-400">
+            {loading ? "..." : filteredItems.length}
+          </h3>
+
+          <p className="mt-1 text-xs text-slate-500">
+            From {items.length} tracked items
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+          <p className="text-sm text-slate-400">Best Opportunity</p>
 
           <h3 className="mt-2 truncate text-lg font-bold text-emerald-400">
             {bestItem?.name ?? "-"}
@@ -412,30 +433,14 @@ export default function MarketScanner() {
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Total Visible Volume</p>
+          <p className="text-sm text-slate-400">Low Risk Items</p>
 
-          <h3 className="mt-2 text-4xl font-bold text-amber-400">
-            {loading ? "..." : totalVolume.toLocaleString()}
+          <h3 className="mt-2 text-4xl font-bold text-emerald-400">
+            {loading ? "..." : lowRiskCount}
           </h3>
 
           <p className="mt-1 text-xs text-slate-500">
-            Combined quantity across results
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Average Score</p>
-
-          <h3
-            className={`mt-2 text-4xl font-bold ${getScoreClass(
-              averageScore
-            )}`}
-          >
-            {loading ? "..." : formatScore(averageScore)}
-          </h3>
-
-          <p className="mt-1 text-xs text-slate-500">
-            {lowOrMediumRiskCount} lower-risk results
+            {watchedVisibleCount} visible watched
           </p>
         </div>
       </div>
@@ -497,6 +502,14 @@ export default function MarketScanner() {
             ))}
           </select>
         </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+          <span>{filteredItems.length} visible items</span>
+          <span>·</span>
+          <span>{watchedVisibleCount} visible watched</span>
+          <span>·</span>
+          <span>{formatGold(totalVisibleValue)} visible market value</span>
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
@@ -507,13 +520,13 @@ export default function MarketScanner() {
             </h2>
 
             <p className="mt-1 text-sm text-slate-400">
-              Filtered live opportunities ready for manual review.
+              Filtered auction opportunities from {realmName}.
             </p>
           </div>
 
-          <span className="flex items-center gap-2 rounded-full border border-blue-800 bg-blue-950/50 px-3 py-1 text-xs font-semibold text-blue-400">
-            <ArrowUpDown size={13} />
-            {filteredItems.length} results
+          <span className="inline-flex items-center gap-2 rounded-full border border-blue-800 bg-blue-950/50 px-3 py-1 text-xs font-semibold text-blue-400">
+            <Eye size={13} />
+            {filteredItems.length} visible
           </span>
         </div>
 
@@ -539,7 +552,7 @@ export default function MarketScanner() {
                     colSpan={8}
                     className="px-6 py-12 text-center text-slate-500"
                   >
-                    Loading scanner data...
+                    Loading scanner results...
                   </td>
                 </tr>
               ) : filteredItems.length === 0 ? (
@@ -548,12 +561,14 @@ export default function MarketScanner() {
                     colSpan={8}
                     className="px-6 py-12 text-center text-slate-500"
                   >
-                    No matching opportunities found.
+                    No matching opportunities. Run a sync or adjust filters.
                   </td>
                 </tr>
               ) : (
                 filteredItems.map((item) => {
-                  const watched = isItemWatched(item);
+                  const isWatched = watchedKeys.has(
+                    getWatchlistKey(realm, item.item_id)
+                  );
 
                   return (
                     <tr
@@ -579,10 +594,10 @@ export default function MarketScanner() {
                             </p>
 
                             <p className="text-xs text-slate-500">
-                              Item #{item.item_id}
+                              Item #{item.item_id} · {realmName}
                             </p>
 
-                            <p className="mt-1 max-w-2xl truncate text-xs text-slate-400">
+                            <p className="mt-1 max-w-xl truncate text-xs text-slate-400">
                               {item.reason}
                             </p>
                           </div>
@@ -607,7 +622,7 @@ export default function MarketScanner() {
                         {item.volume.toLocaleString()}
                       </td>
 
-                      <td className="px-6 py-4 text-right text-slate-400">
+                      <td className="px-6 py-4 text-right text-slate-300">
                         {item.listing_count.toLocaleString()}
                       </td>
 
@@ -632,22 +647,25 @@ export default function MarketScanner() {
                       </td>
 
                       <td className="px-6 py-4 text-right">
-                        <button
-                          onClick={() => toggleWatchlist(item)}
-                          disabled={watchlistLoading}
-                          className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                            watched
-                              ? "border-amber-700 bg-amber-950/40 text-amber-400 hover:bg-amber-900/40"
-                              : "border-slate-700 bg-slate-950 text-slate-300 hover:border-amber-700 hover:text-amber-400"
-                          }`}
-                        >
-                          <Star
-                            size={14}
-                            className={watched ? "fill-current" : ""}
-                          />
-
-                          {watched ? "Watching" : "Watch"}
-                        </button>
+                        {isWatched ? (
+                          <button
+                            onClick={() => removeFromWatchlist(item)}
+                            disabled={updatingWatchlist}
+                            className="inline-flex items-center gap-2 rounded-lg border border-red-900 bg-red-950/30 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <Trash2 size={14} />
+                            Remove
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => addToWatchlist(item)}
+                            disabled={updatingWatchlist}
+                            className="inline-flex items-center gap-2 rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-900/40 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <Star size={14} />
+                            Watch
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -657,6 +675,26 @@ export default function MarketScanner() {
           </table>
         </div>
       </div>
+
+      {items.length > 0 && (
+        <div className="rounded-xl border border-emerald-800 bg-emerald-950/20 p-5">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 text-emerald-400" size={18} />
+
+            <div>
+              <h3 className="font-semibold text-emerald-300">
+                Scanner ready
+              </h3>
+
+              <p className="mt-1 text-sm text-slate-400">
+                This page now uses the live Blizzard realm selector. Individual
+                realm names can be selected even when they share the same
+                connected auction house.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
