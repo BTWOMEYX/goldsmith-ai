@@ -1,13 +1,15 @@
-import os
-import httpx
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete
+
 from app.services.blizzard import blizzard_service
 from database import get_db
 from models import TrackedItem
 
-router = APIRouter(prefix="/api", tags=["sync"])
+router = APIRouter(
+    prefix="/api",
+    tags=["Sync"],
+)
 
 LOCAL_ITEM_REGISTRY = {
     240161: "Null Lotus",
@@ -15,125 +17,151 @@ LOCAL_ITEM_REGISTRY = {
     219931: "Bismuth Ore (Tier 3)",
     219933: "Ironclaw Ore (Tier 3)",
     225369: "Gilded Alloy",
-    15065:  "Ancient Leather",
+    15065: "Ancient Leather",
     219932: "Aqirite Ore (Tier 3)",
-    245772: "Arkhana Crystallite"
+    245772: "Arkhana Crystallite",
+    225449: "Sample Premium Alloy",
+    173202: "Shadowghast Ingot",
+    173204: "Elethium Ore",
 }
 
-def resolve_item_name_natively(item_id: int) -> str:
+
+def resolve_item_name(item_id: int) -> str:
     if item_id in LOCAL_ITEM_REGISTRY:
         return LOCAL_ITEM_REGISTRY[item_id]
-    if 217000 <= item_id <= 217999 or 260000 <= item_id <= 261000:
+
+    if 217000 <= item_id <= 217999:
         return f"Algari Competitor Asset {item_id}"
-    return f"Khaz Algar Trade Gear {item_id}"
+
+    if 260000 <= item_id <= 261000:
+        return f"Algari Competitor Asset {item_id}"
+
+    if item_id > 210000:
+        return f"Khaz Algar Trade Gear {item_id}"
+
+    return f"Premium Speculative Asset {item_id}"
 
 
 @router.post("/sync-auctions")
 async def sync_auctions(
-    realm_name: str = Query(default="illidan"),  # Accept clean string names dynamically
-    db: AsyncSession = Depends(get_db)
+    connected_realm_id: int = Query(default=11),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
-        # 1. Standardize the target name into an API slug format
-        target_slug = realm_name.lower().strip().replace(" ", "-").replace("'", "")
-        print(f"[ENGINE RECON] Resolving live infrastructure node for realm: '{target_slug}'")
-        
-        # 2. Query Blizzard's official search index to find the exact connected-realm ID
-        token = await blizzard_service.get_token()
-        search_url = "https://us.api.blizzard.com/data/wow/search/connected-realm"
-        
-        async with httpx.AsyncClient() as client:
-            search_response = await client.get(
-                search_url,
-                params={
-                    "namespace": "dynamic-us",
-                    "locale": "en_US",
-                    "realms.slug": target_slug,
-                    "access_token": token
-                },
-                timeout=10.0
-            )
-            
-            if search_response.status_code != 200:
-                return {"status": "Sync Aborted", "message": f"Blizzard Search Index failed: {search_response.text}"}
-                
-            search_data = search_response.json()
-            
-        results = search_data.get("results", [])
-        if not results:
-            print(f"[ENGINE ERROR] Server lookup failed. '{target_slug}' does not match any current Blizzard region maps.")
-            return {"status": "Sync Aborted", "message": f"Realm '{realm_name}' not found in region grids."}
-            
-        # Extract the official dynamic ID returned straight from Blizzard
-        resolved_realm_id = results[0]["data"]["id"]
-        print(f"[ENGINE SUCCESS] Core match found! '{realm_name}' mapped to active dynamic ID: {resolved_realm_id}")
-        
-        # 3. Pull down the active live data using the verified ID
-        data = await blizzard_service.get_auction_house_data(connected_realm_id=resolved_realm_id)
+        print(
+            f"[SYNC] Starting auction sync for connected_realm_id={connected_realm_id}"
+        )
+
+        data = await blizzard_service.get_auction_house_data(
+            connected_realm_id=connected_realm_id
+        )
+
         if not data or "auctions" not in data:
-            return {"status": "Sync Aborted", "message": f"Blizzard returned empty payload for resolved ID {resolved_realm_id}"}
-            
+            return {
+                "status": "Sync Aborted",
+                "message": "Invalid auction payload from Blizzard API.",
+            }
+
         auctions = data.get("auctions", [])
-        print(f"[ENGINE SUCCESS] Core file download complete. Total lines read: {len(auctions)}")
-        
-        # 4. Extract pricing metrics across entire dataset
-        item_prices = {}
-        item_volumes = {}
+
+        print(f"[SYNC] Auctions downloaded: {len(auctions)}")
+
+        item_prices: dict[int, float] = {}
+        item_volumes: dict[int, int] = {}
 
         for auction in auctions:
-            item_id = auction.get("item", {}).get("id")
+            item = auction.get("item", {})
+            item_id = item.get("id")
+
             if not item_id:
                 continue
-                
-            buyout = auction.get("unit_price") or auction.get("buyout") or auction.get("bid", 0)
-            price_gold = buyout / 10000
 
+            raw_price = (
+                auction.get("unit_price")
+                or auction.get("buyout")
+                or auction.get("bid")
+                or 0
+            )
+
+            if raw_price <= 0:
+                continue
+
+            price_gold = raw_price / 10000
+
+            quantity = auction.get("quantity", 1)
+
+            # Filter out junk listings and absurd outliers
             if 5.0 <= price_gold <= 200000.0:
                 if item_id not in item_prices or price_gold < item_prices[item_id]:
                     item_prices[item_id] = price_gold
-                item_volumes[item_id] = item_volumes.get(item_id, 0) + 1
 
-        # 5. Filter and score top margin flipped items
+                item_volumes[item_id] = item_volumes.get(item_id, 0) + quantity
+
         valuable_items = []
+
         for item_id, price in item_prices.items():
             volume = item_volumes.get(item_id, 1)
-            if volume > 5:
-                profit_potential = round(price * 0.12, 2)  
-                valuable_items.append({
-                    "item_id": item_id,
-                    "price": price,
-                    "score": profit_potential
-                })
 
-        valuable_items.sort(key=lambda x: x["score"], reverse=True)
+            if volume > 5:
+                estimated_profit = round(price * 0.12, 2)
+
+                valuable_items.append(
+                    {
+                        "item_id": item_id,
+                        "name": resolve_item_name(item_id),
+                        "price": price,
+                        "volume": volume,
+                        "score": estimated_profit,
+                    }
+                )
+
+        valuable_items.sort(
+            key=lambda item: item["score"],
+            reverse=True,
+        )
+
         top_opportunities = valuable_items[:15]
 
-        # 6. Wipe obsolete transaction logs for this specific dynamic ID partition
-        await db.execute(delete(TrackedItem).where(TrackedItem.realm_id == resolved_realm_id))
+        await db.execute(
+            delete(TrackedItem).where(
+                TrackedItem.realm_id == connected_realm_id
+            )
+        )
+
         await db.flush()
 
-        # 7. Commit fresh rows into PostgreSQL
-        for opp in top_opportunities:
-            item_id = opp["item_id"]
-            db.add(TrackedItem(
-                item_id=item_id,
-                realm_id=resolved_realm_id,
-                name=resolve_item_name_natively(item_id),  
-                current_price=opp["price"],
-                profit_margin=opp["score"]
-            ))
-            
+        for opportunity in top_opportunities:
+            db.add(
+                TrackedItem(
+                    item_id=opportunity["item_id"],
+                    realm_id=connected_realm_id,
+                    name=opportunity["name"],
+                    current_price=opportunity["price"],
+                    profit_margin=opportunity["score"],
+                )
+            )
+
         await db.commit()
-        print(f"[DATABASE SYSTEM] Data commit complete for '{realm_name}' (ID: {resolved_realm_id}).")
-        
+
+        print(
+            f"[SYNC] Completed. Items scanned={len(item_prices)}, "
+            f"opportunities={len(top_opportunities)}"
+        )
+
         return {
-            "status": "Success", 
-            "realm_monitored": realm_name,
-            "resolved_internal_id": resolved_realm_id,
-            "items_processed": len(item_prices)
+            "status": "Success",
+            "connected_realm_id": connected_realm_id,
+            "auctions_downloaded": len(auctions),
+            "items_scanned": len(item_prices),
+            "opportunities_unlocked": len(top_opportunities),
         }
-        
-    except Exception as e:
+
+    except Exception as error:
         await db.rollback()
-        print(f"[CRITICAL PIPELINE ERROR] Execution failed: {str(e)}") 
-        return {"status": "Sync Failed", "error": str(e)}
+
+        print(f"[SYNC ERROR] {str(error)}")
+
+        return {
+            "status": "Sync Failed",
+            "error": str(error),
+        }

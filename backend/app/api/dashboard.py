@@ -1,54 +1,60 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from app.utils.realms import BLIZZARD_REALM_MATRIX
+
 from database import get_db
 from models import TrackedItem
 
-router = APIRouter(prefix="/api", tags=["dashboard"])
+router = APIRouter(
+    prefix="/api",
+    tags=["Dashboard"],
+)
 
-
-@router.get("/realms")
-async def get_supported_realms():
-    """
-    Returns an alphabetically structured list of servers matching frontend drop-down requirements.
-    """
-    server_list = [
-        {"id": realm_id, "name": realm_name} 
-        for realm_id, realm_name in BLIZZARD_REALM_MATRIX.items()
-    ]
-    # Sort alphabetically by display name string
-    server_list.sort(key=lambda x: x["name"])
-    return server_list
+REALM_NAMES = {
+    11: "Illidan",
+    4: "Area 52",
+    12: "Sargeras",
+    53: "Tichondrius",
+}
 
 
 @router.get("/dashboard")
 async def get_dashboard_data(
-    connected_realm_id: int = Query(default=3683),  # Match sync identifier
-    db: AsyncSession = Depends(get_db)
+    connected_realm_id: int = Query(default=11),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
-        realm_target = connected_realm_id if connected_realm_id in BLIZZARD_REALM_MATRIX else 363
-        
         result = await db.execute(
             select(TrackedItem)
-            .where(TrackedItem.realm_id == realm_target)
+            .where(TrackedItem.realm_id == connected_realm_id)
             .order_by(TrackedItem.profit_margin.desc())
         )
+
         items = result.scalars().all()
-        
+
         return {
             "status": "Success",
-            "realm": BLIZZARD_REALM_MATRIX.get(realm_target, "Illidan"),
+            "connected_realm_id": connected_realm_id,
+            "realm": REALM_NAMES.get(
+                connected_realm_id,
+                f"Connected Realm {connected_realm_id}",
+            ),
+            "item_count": len(items),
             "items": [
                 {
-                    "id": i.id,
-                    "item_id": i.item_id,
-                    "name": i.name,
-                    "current_price": i.current_price,
-                    "profit_margin": i.profit_margin
-                } for i in items
-            ]
+                    "id": item.id,
+                    "item_id": item.item_id,
+                    "name": item.name,
+                    "current_price": item.current_price,
+                    "profit_margin": item.profit_margin,
+                }
+                for item in items
+            ],
         }
-    except Exception as e:
-        return {"status": "Error", "error": str(e)}
+
+    except Exception as error:
+        return {
+            "status": "Error",
+            "connected_realm_id": connected_realm_id,
+            "error": str(error),
+        }

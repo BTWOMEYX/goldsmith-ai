@@ -1,37 +1,31 @@
-import React, { useEffect, useState } from "react";
-
-interface Realm {
+type Realm = {
   id: number;
   name: string;
-}
+};
 
-interface RealmSelectorProps {
+type RealmSelectorProps = {
   selectedRealm: number;
-  onRealmChange: (id: number) => void;
-}
+  onRealmChange: (realmId: number) => void;
+};
 
-export default function RealmSelector({ selectedRealm, onRealmChange }: RealmSelectorProps) {
-  const [realms, setRealms] = useState<Realm[]>([]);
+const WOW_REALMS: Realm[] = [
+  { id: 11, name: "US - Illidan" },
+  { id: 4, name: "US - Area 52" },
+  { id: 12, name: "US - Sargeras" },
+  { id: 53, name: "US - Tichondrius" },
+];
 
-  useEffect(() => {
-    // Queries the backend to dynamically pull the updated collection matrix array
-    fetch("http://localhost:8000/api/realms")
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setRealms(data);
-        }
-      })
-      .catch((err) => console.error("Failed loading dropdown network targets:", err));
-  }, []);
-
+export default function RealmSelector({
+  selectedRealm,
+  onRealmChange,
+}: RealmSelectorProps) {
   return (
     <select
       value={selectedRealm}
-      onChange={(e) => onRealmChange(Number(e.target.value))}
-      className="bg-slate-800 text-white px-4 py-2 rounded-md border border-slate-700 outline-none cursor-pointer focus:border-amber-500"
+      onChange={(event) => onRealmChange(Number(event.target.value))}
+      className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 outline-none transition hover:border-slate-600 focus:border-amber-500"
     >
-      {realms.map((realm) => (
+      {WOW_REALMS.map((realm) => (
         <option key={realm.id} value={realm.id}>
           {realm.name}
         </option>
