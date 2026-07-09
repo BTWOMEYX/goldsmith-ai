@@ -15,6 +15,10 @@ router = APIRouter(
 )
 
 
+AH_CUT_PERCENT = 5.0
+AH_CUT_RATE = AH_CUT_PERCENT / 100
+
+
 ALLOWED_TRADE_STATUSES = {
     "open",
     "sold",
@@ -62,14 +66,22 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+
 def calculate_expected_values(
     quantity: int,
     buy_price_each: float,
     target_sale_price_each: float,
 ) -> dict:
     total_buy_cost = round(quantity * buy_price_each, 2)
-    expected_total_sale_value = round(quantity * target_sale_price_each, 2)
-    expected_profit = round(expected_total_sale_value - total_buy_cost, 2)
+
+    expected_gross_sale_value = round(quantity * target_sale_price_each, 2)
+    expected_sale_fee_value = round(expected_gross_sale_value * AH_CUT_RATE, 2)
+    expected_net_sale_value = round(
+        expected_gross_sale_value - expected_sale_fee_value,
+        2,
+    )
+
+    expected_profit = round(expected_net_sale_value - total_buy_cost, 2)
 
     expected_roi_percent = (
         round((expected_profit / total_buy_cost) * 100, 2)
@@ -79,10 +91,11 @@ def calculate_expected_values(
 
     return {
         "total_buy_cost": total_buy_cost,
-        "expected_total_sale_value": expected_total_sale_value,
+        "expected_total_sale_value": expected_net_sale_value,
         "expected_profit": expected_profit,
         "expected_roi_percent": expected_roi_percent,
     }
+
 
 
 def calculate_realized_values(
@@ -129,6 +142,10 @@ def serialize_trade(trade: TradeEntry) -> dict:
         "expected_total_sale_value": trade.expected_total_sale_value,
         "expected_profit": trade.expected_profit,
         "expected_roi_percent": trade.expected_roi_percent,
+        "expected_ah_cut_percent": AH_CUT_PERCENT,
+        "expected_gross_sale_value": round(trade.quantity_bought * trade.target_sale_price_each, 2),
+        "expected_sale_fee_value": round((trade.quantity_bought * trade.target_sale_price_each) * AH_CUT_RATE, 2),
+        "expected_net_sale_value": trade.expected_total_sale_value,
         "quantity_sold": trade.quantity_sold,
         "actual_sale_price_each": trade.actual_sale_price_each,
         "gross_sale_value": trade.gross_sale_value,

@@ -553,7 +553,7 @@ export default function ProfitTracker() {
                       </p>
 
                       <p className="mt-1 text-xs text-slate-500">
-                        Expected {formatGold(trade.expected_profit)}
+                        Expected net {formatGold(trade.expected_profit)}
                       </p>
                     </td>
 

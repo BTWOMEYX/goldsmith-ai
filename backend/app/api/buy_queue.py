@@ -15,6 +15,10 @@ router = APIRouter(
 )
 
 
+AH_CUT_PERCENT = 5.0
+AH_CUT_RATE = AH_CUT_PERCENT / 100
+
+
 ALLOWED_STATUSES = {
     "queued",
     "bought",
@@ -89,6 +93,8 @@ def serialize_queue_item(item: BuyQueueItem) -> dict:
         "expected_profit_each": item.expected_profit_each,
         "expected_total_profit": item.expected_total_profit,
         "expected_margin_percent": item.expected_margin_percent,
+        "ah_cut_percent": AH_CUT_PERCENT,
+        "profit_model": "net_after_ah_cut",
         "status": item.status,
         "bought_quantity": item.bought_quantity,
         "bought_price_each": item.bought_price_each,
@@ -117,23 +123,47 @@ def build_summary(items: list[BuyQueueItem]) -> dict:
     }
 
 
+
 def calculate_queue_numbers(payload: BuyQueueFromAlertPayload) -> dict:
     quantity = max(int(payload.suggested_quantity or 0), 0)
     max_price_each = round(float(payload.max_price_each or 0), 2)
     target_sale_price_each = round(float(payload.target_sale_price_each or 0), 2)
 
     max_total_spend = round(quantity * max_price_each, 2)
-    expected_profit_each = round(target_sale_price_each - max_price_each, 2)
+
+    gross_profit_each = round(target_sale_price_each - max_price_each, 2)
+    gross_total_profit = round(gross_profit_each * quantity, 2)
+    gross_margin_percent = (
+        round((gross_profit_each / max_price_each) * 100, 2)
+        if max_price_each > 0
+        else 0
+    )
+
+    net_sale_price_each = round(target_sale_price_each * (1 - AH_CUT_RATE), 2)
+    expected_profit_each = round(net_sale_price_each - max_price_each, 2)
     expected_total_profit = round(expected_profit_each * quantity, 2)
+    expected_margin_percent = (
+        round((expected_profit_each / max_price_each) * 100, 2)
+        if max_price_each > 0
+        else 0
+    )
 
     return {
         "suggested_quantity": quantity,
         "max_price_each": max_price_each,
         "target_sale_price_each": target_sale_price_each,
         "max_total_spend": max_total_spend,
+
+        "gross_profit_each": gross_profit_each,
+        "gross_total_profit": gross_total_profit,
+        "gross_margin_percent": gross_margin_percent,
+
+        "net_sale_price_each": net_sale_price_each,
         "expected_profit_each": expected_profit_each,
         "expected_total_profit": expected_total_profit,
+        "expected_margin_percent": expected_margin_percent,
     }
+
 
 
 @router.get("/buy-queue")
@@ -210,7 +240,7 @@ async def add_from_alert(
         existing_item.target_sale_price_each = numbers["target_sale_price_each"]
         existing_item.expected_profit_each = numbers["expected_profit_each"]
         existing_item.expected_total_profit = numbers["expected_total_profit"]
-        existing_item.expected_margin_percent = payload.expected_margin_percent
+        existing_item.expected_margin_percent = numbers["expected_margin_percent"]
         existing_item.reason = payload.reason
         existing_item.notes = payload.notes
         existing_item.updated_at = utc_now()
@@ -245,7 +275,7 @@ async def add_from_alert(
         target_sale_price_each=numbers["target_sale_price_each"],
         expected_profit_each=numbers["expected_profit_each"],
         expected_total_profit=numbers["expected_total_profit"],
-        expected_margin_percent=payload.expected_margin_percent,
+        expected_margin_percent=numbers["expected_margin_percent"],
         status="queued",
         reason=payload.reason,
         notes=payload.notes,

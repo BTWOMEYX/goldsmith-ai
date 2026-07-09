@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import AutoPilotPanel from "../components/AutoPilotPanel";
+import StrategyProfilePanel from "../components/StrategyProfilePanel";
 import RealmSelect from "../components/RealmSelect";
 
 type IgnoreRule = {

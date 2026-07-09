@@ -51,6 +51,7 @@ type DealAlert = {
   target_resale_price: number;
   estimated_profit_before_costs: number;
   estimated_margin_percent: number;
+  estimated_net_margin_percent?: number;
   liquidity_score: number;
   sale_speed: string;
   suggested_buy_quantity: number;
@@ -631,7 +632,7 @@ export default function DealAlerts() {
         suggested_quantity: alert.suggested_buy_quantity,
         max_price_each: alert.suggested_buy_below,
         target_sale_price_each: alert.target_resale_price,
-        expected_margin_percent: alert.estimated_margin_percent,
+        expected_margin_percent: alert.estimated_net_margin_percent ?? alert.estimated_margin_percent,
         reason: alert.decision_note || alert.signal_reason,
       });
 

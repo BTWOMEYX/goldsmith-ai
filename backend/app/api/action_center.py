@@ -13,6 +13,7 @@ from app.api.deals import (
 from app.services.ignore_rules import filter_ignored_tracked_items, get_active_ignore_rules
 from app.services.market_memory import build_market_memory_map
 from app.services.performance_feedback import build_feedback_adjustment_map
+from app.services.strategy_profiles import apply_strategy_to_alert, get_active_strategy_profile
 from app.utils.realms import get_realm_display_name
 from database import get_db
 from models import MarketSnapshot, TrackedItem, WatchlistItem
@@ -270,13 +271,18 @@ async def get_action_center(
             connected_realm_id=connected_realm_id,
         )
 
+        strategy_profile = get_active_strategy_profile()
+
         alert_items = [
-            serialize_deal_alert(
-                item=item,
-                watched_keys=watched_keys,
-                snapshot_map=snapshot_map,
-                market_memory_map=memory_map,
-                performance_feedback_map=feedback_map,
+            apply_strategy_to_alert(
+                serialize_deal_alert(
+                    item=item,
+                    watched_keys=watched_keys,
+                    snapshot_map=snapshot_map,
+                    market_memory_map=memory_map,
+                    performance_feedback_map=feedback_map,
+                ),
+                strategy_profile,
             )
             for item in tracked_items
         ]
@@ -359,6 +365,7 @@ async def get_action_center(
             "status": "Success",
             "connected_realm_id": connected_realm_id,
             "realm": realm_name,
+            "strategy": strategy_profile,
             "top_action": top_action,
             "top_alert": top_alert,
             "actions": alert_items[:5],

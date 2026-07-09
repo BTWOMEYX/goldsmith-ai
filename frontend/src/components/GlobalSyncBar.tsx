@@ -19,6 +19,19 @@ const API_BASE_URL = "http://127.0.0.1:8000/api";
 type UiMode = "simple" | "pro";
 type ScanMode = "quick" | "full";
 
+type StrategyProfile = {
+  id: string;
+  label: string;
+  description: string;
+};
+
+type StrategyResponse = {
+  status: string;
+  active_profile: StrategyProfile;
+  profiles: StrategyProfile[];
+  error?: string;
+};
+
 type SyncJob = {
   job_id?: string;
   scan_mode?: string;
@@ -37,6 +50,7 @@ const UI_MODE_KEY = "goldsmith.uiMode";
 const REALM_KEY = "goldsmith.defaultRealm";
 const GOLDSMITH_REALM_CHANGED_EVENT = "goldsmith-realm-changed";
 const LAST_SYNC_KEY = "goldsmith.lastSync";
+const STRATEGY_CHANGED_EVENT = "goldsmith-strategy-changed";
 const EXPANDED_KEY = "goldsmith.globalSyncExpanded";
 
 function readUiMode(): UiMode {
@@ -144,6 +158,8 @@ export default function GlobalSyncBar() {
   const [expanded, setExpandedState] = useState(() => readExpanded());
   const [job, setJob] = useState<SyncJob | null>(null);
   const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
+  const [strategyProfile, setStrategyProfile] = useState<StrategyProfile | null>(null);
+  const [strategyProfiles, setStrategyProfiles] = useState<StrategyProfile[]>([]);
   const [lastSyncLabel, setLastSyncLabel] = useState("Never");
   const [error, setError] = useState("");
   const [startingMode, setStartingMode] = useState<ScanMode | null>(null);
@@ -240,6 +256,51 @@ export default function GlobalSyncBar() {
     }
   }
 
+
+  async function loadStrategy() {
+    try {
+      const response = await axios.get<StrategyResponse>(
+        `${API_BASE_URL}/strategy/status`,
+      );
+
+      if (response.data.status === "Success") {
+        setStrategyProfile(response.data.active_profile);
+        setStrategyProfiles(response.data.profiles);
+      }
+    } catch {
+      setStrategyProfile(null);
+      setStrategyProfiles([]);
+    }
+  }
+
+  async function changeStrategy(profileId: string) {
+    try {
+      const response = await axios.post<StrategyResponse>(
+        `${API_BASE_URL}/strategy/settings`,
+        {
+          profile_id: profileId,
+        },
+      );
+
+      if (response.data.status === "Success") {
+        setStrategyProfile(response.data.active_profile);
+        setStrategyProfiles(response.data.profiles);
+
+        window.dispatchEvent(
+          new CustomEvent(STRATEGY_CHANGED_EVENT, {
+            detail: {
+              profileId: response.data.active_profile.id,
+            },
+          }),
+        );
+
+        window.dispatchEvent(new CustomEvent("goldsmith-sync-complete"));
+      }
+    } catch {
+      // Keep the sync bar quiet if strategy API is unavailable.
+    }
+  }
+
   async function loadAutoPilot() {
     try {
       const response = await axios.get(`${API_BASE_URL}/autopilot/status`);
@@ -330,6 +391,7 @@ export default function GlobalSyncBar() {
   useEffect(() => {
     loadLastSyncLabel();
     loadAutoPilot();
+    loadStrategy();
     reconnectActiveJob();
 
     const interval = window.setInterval(() => {
@@ -340,6 +402,7 @@ export default function GlobalSyncBar() {
       setRealmId(latestRealm);
       loadLastSyncLabel();
       loadAutoPilot();
+      loadStrategy();
 
       if (!running) {
         reconnectActiveJob();
@@ -361,13 +424,19 @@ export default function GlobalSyncBar() {
       }
     }
 
+    function handleStrategyChanged() {
+      loadStrategy();
+    }
+
     window.addEventListener("goldsmith-ui-mode-changed", handleModeChange);
     window.addEventListener(GOLDSMITH_REALM_CHANGED_EVENT, handleRealmChanged);
+    window.addEventListener(STRATEGY_CHANGED_EVENT, handleStrategyChanged);
 
     return () => {
       window.clearInterval(interval);
       window.removeEventListener("goldsmith-ui-mode-changed", handleModeChange);
       window.removeEventListener(GOLDSMITH_REALM_CHANGED_EVENT, handleRealmChanged);
+      window.removeEventListener(STRATEGY_CHANGED_EVENT, handleStrategyChanged);
     };
   }, [realmId, running]);
 
@@ -411,6 +480,12 @@ export default function GlobalSyncBar() {
               {autoPilotEnabled ? "Auto Watch Active" : "Auto Watch Off"}
             </span>
 
+            {strategyProfile && (
+              <span className="rounded-full border border-blue-800 bg-blue-950/40 px-2 py-1 text-[11px] font-bold text-blue-300">
+                Strategy: {strategyProfile.label}
+              </span>
+            )}
+
             {running && (
               <span className="rounded-full border border-emerald-800 bg-emerald-950/40 px-2 py-1 text-[11px] font-bold text-emerald-300">
                 {Math.round(progress)}%
@@ -438,6 +513,21 @@ export default function GlobalSyncBar() {
               setJob(null);
             }}
           />
+
+          {strategyProfiles.length > 0 && (
+            <select
+              value={strategyProfile?.id ?? "balanced"}
+              onChange={(event) => changeStrategy(event.target.value)}
+              title="Active GoldSmith strategy profile"
+              className="min-w-[190px] rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-semibold text-white outline-none transition focus:border-blue-500"
+            >
+              {strategyProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.label}
+                </option>
+              ))}
+            </select>
+          )}
 
           <button
             type="button"

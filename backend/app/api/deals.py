@@ -5,6 +5,7 @@ from sqlalchemy.future import select
 from app.services.ignore_rules import filter_ignored_tracked_items, get_active_ignore_rules
 from app.services.market_memory import build_market_memory_map, empty_market_memory
 from app.services.performance_feedback import build_feedback_adjustment_map, combine_performance_feedback_adjustments
+from app.services.strategy_profiles import apply_strategy_to_alert, get_active_strategy_profile
 from app.utils.realms import get_realm_display_name
 from database import get_db
 from models import PriceSnapshot, TrackedItem, WatchlistItem
@@ -13,6 +14,10 @@ router = APIRouter(
     prefix="/api",
     tags=["Deal Alerts"],
 )
+
+
+AH_CUT_PERCENT = 5.0
+AH_CUT_RATE = AH_CUT_PERCENT / 100
 
 
 FAST_MOVE_CATEGORIES = {
@@ -122,6 +127,7 @@ def apply_market_memory_to_confidence(
     return round(max(1, min(adjusted_confidence, 100)), 1)
 
 
+
 def get_price_targets(item: TrackedItem, market_memory: dict | None = None) -> dict:
     category = item.goldsmith_category or "Unknown / Other"
     current_price = item.current_price
@@ -157,17 +163,43 @@ def get_price_targets(item: TrackedItem, market_memory: dict | None = None) -> d
             buy_below = min(buy_below, average_30 * 0.82)
             resale_target = min(resale_target, average_30 * 1.05)
 
-    estimated_profit = resale_target - buy_below
-    estimated_margin_percent = (
-        (estimated_profit / buy_below) * 100 if buy_below > 0 else 0
+    gross_profit = resale_target - buy_below
+    gross_margin_percent = (
+        (gross_profit / buy_below) * 100 if buy_below > 0 else 0
+    )
+
+    estimated_ah_cut = resale_target * AH_CUT_RATE
+    net_resale_after_ah_cut = resale_target - estimated_ah_cut
+    net_profit_after_ah_cut = net_resale_after_ah_cut - buy_below
+    net_margin_percent = (
+        (net_profit_after_ah_cut / buy_below) * 100 if buy_below > 0 else 0
+    )
+
+    break_even_resale_price = (
+        buy_below / (1 - AH_CUT_RATE)
+        if buy_below > 0 and AH_CUT_RATE < 1
+        else buy_below
     )
 
     return {
         "suggested_buy_below": round(buy_below, 2),
         "target_resale_price": round(resale_target, 2),
-        "estimated_profit_before_costs": round(estimated_profit, 2),
-        "estimated_margin_percent": round(estimated_margin_percent, 2),
+
+        "ah_cut_percent": AH_CUT_PERCENT,
+        "estimated_ah_cut": round(estimated_ah_cut, 2),
+        "break_even_resale_price": round(break_even_resale_price, 2),
+
+        "gross_estimated_profit": round(gross_profit, 2),
+        "gross_estimated_margin_percent": round(gross_margin_percent, 2),
+
+        "estimated_profit_before_costs": round(gross_profit, 2),
+        "estimated_margin_percent": round(net_margin_percent, 2),
+
+        "net_resale_after_ah_cut": round(net_resale_after_ah_cut, 2),
+        "estimated_net_profit_after_ah_cut": round(net_profit_after_ah_cut, 2),
+        "estimated_net_margin_percent": round(net_margin_percent, 2),
     }
+
 
 
 def calculate_liquidity_score(item: TrackedItem) -> float:
@@ -981,6 +1013,9 @@ def should_auto_watch(alert: dict) -> bool:
     if alert["is_watched"]:
         return False
 
+    if alert.get("strategy_blocked"):
+        return False
+
     if alert.get("suggested_buy_quantity", 0) <= 0:
         return False
 
@@ -1078,13 +1113,20 @@ async def get_deal_alerts(
             connected_realm_id=connected_realm_id,
         )
 
+        strategy_profile = get_active_strategy_profile()
+
+        strategy_profile = get_active_strategy_profile()
+
         alert_items = [
-            serialize_deal_alert(
-                item=item,
-                watched_keys=watched_keys,
-                snapshot_map=snapshot_map,
-                market_memory_map=memory_map,
-                performance_feedback_map=feedback_map,
+            apply_strategy_to_alert(
+                serialize_deal_alert(
+                    item=item,
+                    watched_keys=watched_keys,
+                    snapshot_map=snapshot_map,
+                    market_memory_map=memory_map,
+                    performance_feedback_map=feedback_map,
+                ),
+                strategy_profile,
             )
             for item in tracked_items
         ]
@@ -1111,6 +1153,7 @@ async def get_deal_alerts(
             "connected_realm_id": connected_realm_id,
             "alert_count": len(alert_items),
             "ignored_count": ignored_count,
+            "strategy": strategy_profile,
             "top_alert": alert_items[0] if alert_items else None,
             "summary": build_deal_summary(alert_items),
             "items": alert_items,
@@ -1180,12 +1223,15 @@ async def auto_watch_deals(
         )
 
         alert_items = [
-            serialize_deal_alert(
-                item=item,
-                watched_keys=watched_keys,
-                snapshot_map=snapshot_map,
-                market_memory_map=memory_map,
-                performance_feedback_map=feedback_map,
+            apply_strategy_to_alert(
+                serialize_deal_alert(
+                    item=item,
+                    watched_keys=watched_keys,
+                    snapshot_map=snapshot_map,
+                    market_memory_map=memory_map,
+                    performance_feedback_map=feedback_map,
+                ),
+                strategy_profile,
             )
             for item in tracked_items
         ]
@@ -1258,6 +1304,7 @@ async def auto_watch_deals(
             "realm": realm_name,
             "auto_watch_added": len(added_items),
             "ignored_count": ignored_count,
+            "strategy": strategy_profile,
             "items": added_items,
         }
 

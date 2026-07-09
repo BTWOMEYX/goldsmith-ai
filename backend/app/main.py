@@ -17,6 +17,7 @@ from app.api.history import router as history_router
 from app.api.realms import router as realms_router
 from app.api.signals import router as signals_router
 from app.api.sync import router as sync_router
+from app.api.strategy import router as strategy_router
 from app.api.sync_jobs import router as sync_jobs_router
 from app.api.trades import router as trades_router
 from app.api.watchlist import router as watchlist_router
@@ -59,6 +60,7 @@ app.include_router(autopilot_router)
 app.include_router(buy_queue_router)
 app.include_router(dashboard_router)
 app.include_router(sync_router)
+app.include_router(strategy_router)
 app.include_router(sync_jobs_router)
 app.include_router(trades_router)
 app.include_router(watchlist_router)

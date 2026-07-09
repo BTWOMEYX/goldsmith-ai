@@ -81,6 +81,7 @@ type DealAlert = {
   suggested_buy_below: number;
   target_resale_price: number;
   estimated_margin_percent: number;
+  estimated_net_margin_percent?: number;
   final_decision: string;
   decision_grade: string;
   decision_score: number;
@@ -259,7 +260,7 @@ export default function BuyQueue() {
             suggested_quantity: alert.suggested_buy_quantity,
             max_price_each: alert.suggested_buy_below,
             target_sale_price_each: alert.target_resale_price,
-            expected_margin_percent: alert.estimated_margin_percent,
+            expected_margin_percent: alert.estimated_net_margin_percent ?? alert.estimated_margin_percent,
             reason: alert.decision_note || alert.signal_reason,
           }),
         ),
@@ -292,8 +293,8 @@ export default function BuyQueue() {
         "Max Price Each",
         "Max Total Spend",
         "Target Sale Price Each",
-        "Expected Profit",
-        "Expected Margin Percent",
+        "Net Profit",
+        "Net Margin Percent",
         "Decision",
         "Grade",
         "Signal",
@@ -678,7 +679,7 @@ export default function BuyQueue() {
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-          <p className="text-xs text-slate-500">Expected Profit</p>
+          <p className="text-xs text-slate-500">Net Profit</p>
           <p className="mt-2 text-2xl font-bold text-emerald-400">
             {formatGold(summary.expected_total_profit)}
           </p>
@@ -799,7 +800,7 @@ export default function BuyQueue() {
                       </p>
 
                       <p className="mt-1 text-xs text-slate-500">
-                        {item.expected_margin_percent.toFixed(1)}% margin
+                        {item.expected_margin_percent.toFixed(1)}% net margin
                       </p>
                     </td>
 
