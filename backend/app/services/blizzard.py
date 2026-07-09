@@ -183,6 +183,8 @@ class BlizzardAPIService:
     async def get_item_display_data(self, item_id: int) -> Dict[str, Any]:
         item_name = f"Item {item_id}"
         item_quality = "unknown"
+        item_class = None
+        item_subclass = None
         icon_url = None
 
         try:
@@ -192,6 +194,14 @@ class BlizzardAPIService:
 
             quality_data = item_data.get("quality", {})
             item_quality = quality_data.get("type", "unknown").lower()
+
+            item_class_data = item_data.get("item_class", {})
+            item_subclass_data = item_data.get("item_subclass", {})
+
+            item_class = item_class_data.get("name") or item_class_data.get("type")
+            item_subclass = item_subclass_data.get("name") or item_subclass_data.get(
+                "type"
+            )
 
         except Exception as error:
             print(f"[ITEM DATA WARNING] Could not fetch item data for {item_id}: {error}")
@@ -214,6 +224,8 @@ class BlizzardAPIService:
             "name": item_name,
             "quality": item_quality,
             "icon_url": icon_url,
+            "item_class": item_class,
+            "item_subclass": item_subclass,
         }
 
     async def get_connected_realm_index(self) -> Dict[str, Any]:

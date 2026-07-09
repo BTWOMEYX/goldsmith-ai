@@ -38,6 +38,8 @@ type RealmSelectProps = {
 
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
+const DEFAULT_REALM_STORAGE_KEY = "goldsmith.defaultRealm";
+
 const FALLBACK_REALMS: RealmOption[] = [
   {
     connected_realm_id: 11,
@@ -127,10 +129,41 @@ function expandRealms(realms: RealmOption[]) {
   );
 }
 
+function readStoredRealmSelection() {
+  try {
+    const storedValue = localStorage.getItem(DEFAULT_REALM_STORAGE_KEY);
+
+    if (!storedValue) {
+      return null;
+    }
+
+    return JSON.parse(storedValue) as {
+      option_id: string;
+      connected_realm_id: number;
+      realm_name: string;
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredRealmSelection(option: ExpandedRealmOption) {
+  localStorage.setItem(
+    DEFAULT_REALM_STORAGE_KEY,
+    JSON.stringify({
+      option_id: option.option_id,
+      connected_realm_id: option.connected_realm_id,
+      realm_name: option.realm_name,
+    })
+  );
+}
+
 export default function RealmSelect({ value, onChange }: RealmSelectProps) {
   const [realms, setRealms] = useState<RealmOption[]>(FALLBACK_REALMS);
   const [loading, setLoading] = useState(false);
+  const [realmsLoaded, setRealmsLoaded] = useState(false);
   const [selectedOptionId, setSelectedOptionId] = useState("");
+  const [storedDefaultApplied, setStoredDefaultApplied] = useState(false);
 
   useEffect(() => {
     async function loadRealms() {
@@ -151,6 +184,7 @@ export default function RealmSelect({ value, onChange }: RealmSelectProps) {
         setRealms(FALLBACK_REALMS);
       } finally {
         setLoading(false);
+        setRealmsLoaded(true);
       }
     }
 
@@ -162,8 +196,42 @@ export default function RealmSelect({ value, onChange }: RealmSelectProps) {
   }, [realms]);
 
   useEffect(() => {
-    if (expandedRealmOptions.length === 0) {
+    if (!realmsLoaded || expandedRealmOptions.length === 0) {
       return;
+    }
+
+    if (!storedDefaultApplied) {
+      const storedSelection = readStoredRealmSelection();
+
+      if (storedSelection) {
+        const storedOption =
+          expandedRealmOptions.find(
+            (option) => option.option_id === storedSelection.option_id
+          ) ??
+          expandedRealmOptions.find(
+            (option) =>
+              option.connected_realm_id ===
+                storedSelection.connected_realm_id &&
+              option.realm_name === storedSelection.realm_name
+          ) ??
+          expandedRealmOptions.find(
+            (option) =>
+              option.connected_realm_id === storedSelection.connected_realm_id
+          );
+
+        if (storedOption) {
+          setSelectedOptionId(storedOption.option_id);
+
+          if (storedOption.connected_realm_id !== value) {
+            onChange(storedOption.connected_realm_id);
+          }
+
+          setStoredDefaultApplied(true);
+          return;
+        }
+      }
+
+      setStoredDefaultApplied(true);
     }
 
     const currentSelectedOption = expandedRealmOptions.find(
@@ -187,7 +255,14 @@ export default function RealmSelect({ value, onChange }: RealmSelectProps) {
     }
 
     setSelectedOptionId(expandedRealmOptions[0].option_id);
-  }, [expandedRealmOptions, selectedOptionId, value]);
+  }, [
+    expandedRealmOptions,
+    onChange,
+    realmsLoaded,
+    selectedOptionId,
+    storedDefaultApplied,
+    value,
+  ]);
 
   const selectedRealmTitle = useMemo(() => {
     const selectedRealm = expandedRealmOptions.find(
@@ -209,6 +284,7 @@ export default function RealmSelect({ value, onChange }: RealmSelectProps) {
     );
 
     if (selectedRealm) {
+      saveStoredRealmSelection(selectedRealm);
       onChange(selectedRealm.connected_realm_id);
     }
   }

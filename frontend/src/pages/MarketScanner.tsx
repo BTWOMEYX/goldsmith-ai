@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   Activity,
+  BarChart3,
   CheckCircle2,
+  Clock,
+  Database,
   Eye,
   RefreshCw,
   Search,
@@ -25,6 +28,9 @@ type MarketItem = {
   reason: string | null;
   icon_url: string | null;
   quality: string | null;
+  item_class: string | null;
+  item_subclass: string | null;
+  goldsmith_category: string;
   profit_margin: number;
 };
 
@@ -50,6 +56,9 @@ type WatchlistItem = {
   reason: string | null;
   icon_url: string | null;
   quality: string | null;
+  item_class: string | null;
+  item_subclass: string | null;
+  goldsmith_category: string;
   profit_margin: number;
   saved_at: string | null;
 };
@@ -60,7 +69,57 @@ type WatchlistResponse = {
   items: WatchlistItem[];
 };
 
+type CaptureItem = {
+  id: number;
+  item_id: number;
+  realm_id: number;
+  realm_name: string;
+  scan_mode: string;
+  min_price: number;
+  average_price: number;
+  total_market_value: number;
+  volume: number;
+  listing_count: number;
+  created_at: string | null;
+};
+
+type CaptureSummaryResponse = {
+  status: string;
+  connected_realm_id: number;
+  realm: string;
+  latest_capture_at: string | null;
+  item_count: number;
+  total_volume: number;
+  total_market_value: number;
+  items: CaptureItem[];
+};
+
 const API_BASE_URL = "http://127.0.0.1:8000/api";
+
+const EMPTY_CAPTURE_SUMMARY: CaptureSummaryResponse = {
+  status: "Success",
+  connected_realm_id: 11,
+  realm: "Illidan",
+  latest_capture_at: null,
+  item_count: 0,
+  total_volume: 0,
+  total_market_value: 0,
+  items: [],
+};
+
+const CATEGORY_FILTERS = [
+  "All",
+  "Crafting Materials",
+  "Consumables",
+  "Enchants",
+  "Gems",
+  "Glyphs",
+  "Recipes / Plans",
+  "Battle Pets",
+  "Gear / Transmog",
+  "Rare / Collector Items",
+  "Unknown / Other",
+];
 
 const QUALITY_FILTERS = [
   "All",
@@ -82,8 +141,34 @@ const SORT_OPTIONS = [
   { value: "volume-desc", label: "Highest volume" },
   { value: "listings-desc", label: "Most listings" },
   { value: "risk-asc", label: "Lowest risk" },
+  { value: "category-asc", label: "Category" },
   { value: "name-asc", label: "Item name" },
 ];
+
+function getCategoryClass(category: string) {
+  switch (category) {
+    case "Crafting Materials":
+      return "text-emerald-300 border-emerald-800 bg-emerald-950/40";
+    case "Consumables":
+      return "text-blue-300 border-blue-800 bg-blue-950/40";
+    case "Enchants":
+      return "text-purple-300 border-purple-800 bg-purple-950/40";
+    case "Gems":
+      return "text-cyan-300 border-cyan-800 bg-cyan-950/40";
+    case "Glyphs":
+      return "text-pink-300 border-pink-800 bg-pink-950/40";
+    case "Recipes / Plans":
+      return "text-orange-300 border-orange-800 bg-orange-950/40";
+    case "Battle Pets":
+      return "text-lime-300 border-lime-800 bg-lime-950/40";
+    case "Gear / Transmog":
+      return "text-amber-300 border-amber-800 bg-amber-950/40";
+    case "Rare / Collector Items":
+      return "text-fuchsia-300 border-fuchsia-800 bg-fuchsia-950/40";
+    default:
+      return "text-slate-400 border-slate-700 bg-slate-900";
+  }
+}
 
 function getQualityClass(quality: string | null) {
   switch (quality?.toLowerCase()) {
@@ -158,6 +243,23 @@ function formatScore(value: number) {
   return `${value.toFixed(1)}/100`;
 }
 
+function formatDateTime(value: string | null) {
+  if (!value) {
+    return "No capture yet";
+  }
+
+  try {
+    return new Intl.DateTimeFormat("en-AU", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return "Unknown";
+  }
+}
+
 function getWatchlistKey(realmId: number, itemId: number) {
   return `${realmId}-${itemId}`;
 }
@@ -167,20 +269,43 @@ export default function MarketScanner() {
   const [realmName, setRealmName] = useState("Illidan");
   const [items, setItems] = useState<MarketItem[]>([]);
   const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
+  const [captureSummary, setCaptureSummary] =
+    useState<CaptureSummaryResponse>(EMPTY_CAPTURE_SUMMARY);
 
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [captureLoading, setCaptureLoading] = useState(false);
   const [updatingWatchlist, setUpdatingWatchlist] = useState(false);
   const [error, setError] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("All");
   const [qualityFilter, setQualityFilter] = useState("All");
   const [riskFilter, setRiskFilter] = useState("All");
   const [sortMode, setSortMode] = useState("score-desc");
 
+  async function loadCaptureSummary(realmId: number) {
+    try {
+      setCaptureLoading(true);
+
+      const response = await axios.get<CaptureSummaryResponse>(
+        `${API_BASE_URL}/capture/summary?connected_realm_id=${realmId}`,
+      );
+
+      setCaptureSummary(response.data ?? EMPTY_CAPTURE_SUMMARY);
+    } catch {
+      setCaptureSummary({
+        ...EMPTY_CAPTURE_SUMMARY,
+        connected_realm_id: realmId,
+        realm: realmName,
+      });
+    } finally {
+      setCaptureLoading(false);
+    }
+  }
+
   async function loadWatchlistOnly() {
     const response = await axios.get<WatchlistResponse>(
-      `${API_BASE_URL}/watchlist`
+      `${API_BASE_URL}/watchlist`,
     );
 
     setWatchlistItems(response.data.items ?? []);
@@ -190,38 +315,26 @@ export default function MarketScanner() {
     try {
       setLoading(true);
 
-      const [dashboardResponse, watchlistResponse] = await Promise.all([
-        axios.get<DashboardResponse>(
-          `${API_BASE_URL}/dashboard?connected_realm_id=${realmId}`
-        ),
-        axios.get<WatchlistResponse>(`${API_BASE_URL}/watchlist`),
-      ]);
+      const [dashboardResponse, watchlistResponse, captureResponse] =
+        await Promise.all([
+          axios.get<DashboardResponse>(
+            `${API_BASE_URL}/dashboard?connected_realm_id=${realmId}`,
+          ),
+          axios.get<WatchlistResponse>(`${API_BASE_URL}/watchlist`),
+          axios.get<CaptureSummaryResponse>(
+            `${API_BASE_URL}/capture/summary?connected_realm_id=${realmId}`,
+          ),
+        ]);
 
       setRealmName(dashboardResponse.data.realm);
       setItems(dashboardResponse.data.items ?? []);
       setWatchlistItems(watchlistResponse.data.items ?? []);
+      setCaptureSummary(captureResponse.data ?? EMPTY_CAPTURE_SUMMARY);
       setError("");
     } catch {
       setError("Unable to load market scanner data.");
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function syncRealm() {
-    try {
-      setSyncing(true);
-      setError("");
-
-      await axios.post(
-        `${API_BASE_URL}/sync-auctions?connected_realm_id=${realm}`
-      );
-
-      await loadMarketData(realm);
-    } catch {
-      setError("Auction sync failed.");
-    } finally {
-      setSyncing(false);
     }
   }
 
@@ -243,6 +356,9 @@ export default function MarketScanner() {
         reason: item.reason,
         icon_url: item.icon_url,
         quality: item.quality,
+        item_class: item.item_class,
+        item_subclass: item.item_subclass,
+        goldsmith_category: item.goldsmith_category,
         profit_margin: item.profit_margin,
       });
 
@@ -273,13 +389,39 @@ export default function MarketScanner() {
     loadMarketData(realm);
   }, [realm]);
 
+  useEffect(() => {
+    function handleGlobalSyncComplete() {
+      loadMarketData(realm);
+    }
+
+    window.addEventListener("goldsmith-sync-complete", handleGlobalSyncComplete);
+
+    return () => {
+      window.removeEventListener(
+        "goldsmith-sync-complete",
+        handleGlobalSyncComplete,
+      );
+    };
+  }, [realm]);
+
   const watchedKeys = useMemo(() => {
     return new Set(
       watchlistItems.map((watchlistItem) =>
-        getWatchlistKey(watchlistItem.realm_id, watchlistItem.item_id)
-      )
+        getWatchlistKey(watchlistItem.realm_id, watchlistItem.item_id),
+      ),
     );
   }, [watchlistItems]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    items.forEach((item) => {
+      const category = item.goldsmith_category || "Unknown / Other";
+      counts.set(category, (counts.get(category) ?? 0) + 1);
+    });
+
+    return counts;
+  }, [items]);
 
   const filteredItems = useMemo(() => {
     const normalisedSearch = searchTerm.trim().toLowerCase();
@@ -287,13 +429,22 @@ export default function MarketScanner() {
     const filtered = items.filter((item) => {
       const itemQuality = item.quality ?? "unknown";
       const itemRisk = item.risk_level ?? "unknown";
+      const itemCategory = item.goldsmith_category ?? "Unknown / Other";
+      const itemClass = item.item_class ?? "";
+      const itemSubclass = item.item_subclass ?? "";
 
       const matchesSearch =
         normalisedSearch.length === 0 ||
         item.name.toLowerCase().includes(normalisedSearch) ||
         item.item_id.toString().includes(normalisedSearch) ||
         itemQuality.toLowerCase().includes(normalisedSearch) ||
-        itemRisk.toLowerCase().includes(normalisedSearch);
+        itemRisk.toLowerCase().includes(normalisedSearch) ||
+        itemCategory.toLowerCase().includes(normalisedSearch) ||
+        itemClass.toLowerCase().includes(normalisedSearch) ||
+        itemSubclass.toLowerCase().includes(normalisedSearch);
+
+      const matchesCategory =
+        categoryFilter === "All" || itemCategory === categoryFilter;
 
       const matchesQuality =
         qualityFilter === "All" ||
@@ -303,7 +454,7 @@ export default function MarketScanner() {
         riskFilter === "All" ||
         itemRisk.toLowerCase() === riskFilter.toLowerCase();
 
-      return matchesSearch && matchesQuality && matchesRisk;
+      return matchesSearch && matchesCategory && matchesQuality && matchesRisk;
     });
 
     return [...filtered].sort((a, b) => {
@@ -318,6 +469,11 @@ export default function MarketScanner() {
           return b.listing_count - a.listing_count;
         case "risk-asc":
           return getRiskRank(a.risk_level) - getRiskRank(b.risk_level);
+        case "category-asc":
+          return (
+            a.goldsmith_category.localeCompare(b.goldsmith_category) ||
+            b.opportunity_score - a.opportunity_score
+          );
         case "name-asc":
           return a.name.localeCompare(b.name);
         case "score-desc":
@@ -325,7 +481,14 @@ export default function MarketScanner() {
           return b.opportunity_score - a.opportunity_score;
       }
     });
-  }, [items, searchTerm, qualityFilter, riskFilter, sortMode]);
+  }, [
+    items,
+    searchTerm,
+    categoryFilter,
+    qualityFilter,
+    riskFilter,
+    sortMode,
+  ]);
 
   const bestItem = useMemo(() => {
     if (!items.length) {
@@ -333,7 +496,7 @@ export default function MarketScanner() {
     }
 
     return [...items].sort(
-      (a, b) => b.opportunity_score - a.opportunity_score
+      (a, b) => b.opportunity_score - a.opportunity_score,
     )[0];
   }, [items]);
 
@@ -344,13 +507,17 @@ export default function MarketScanner() {
 
   const watchedVisibleCount = useMemo(() => {
     return filteredItems.filter((item) =>
-      watchedKeys.has(getWatchlistKey(realm, item.item_id))
+      watchedKeys.has(getWatchlistKey(realm, item.item_id)),
     ).length;
   }, [filteredItems, watchedKeys, realm]);
 
   const totalVisibleValue = useMemo(() => {
     return filteredItems.reduce((sum, item) => sum + item.current_price, 0);
   }, [filteredItems]);
+
+  const topCapturedItems = useMemo(() => {
+    return captureSummary.items.slice(0, 8);
+  }, [captureSummary]);
 
   return (
     <div className="space-y-8">
@@ -359,8 +526,8 @@ export default function MarketScanner() {
           <h2 className="text-xl font-semibold text-white">Market Scanner</h2>
 
           <p className="mt-1 text-sm text-slate-400">
-            Scan connected-realm auction opportunities, filter by risk and save
-            targets to your watchlist.
+            Filter opportunities by category, risk and quality. Global Sync
+            handles all Quick Scan and Full Scan runs.
           </p>
         </div>
 
@@ -370,23 +537,11 @@ export default function MarketScanner() {
           <button
             type="button"
             onClick={() => loadMarketData(realm)}
-            disabled={loading || syncing}
+            disabled={loading}
             className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-5 py-2 text-sm font-semibold text-slate-200 transition hover:border-slate-600 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-
-            Refresh
-          </button>
-
-          <button
-            type="button"
-            onClick={syncRealm}
-            disabled={syncing}
-            className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-5 py-2 text-sm font-semibold text-black transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Activity size={16} className={syncing ? "animate-pulse" : ""} />
-
-            {syncing ? "Syncing..." : "Sync Auctions"}
+            Refresh Data
           </button>
         </div>
       </div>
@@ -450,10 +605,230 @@ export default function MarketScanner() {
       <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
         <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-300">
           <SlidersHorizontal size={16} />
+          Category Engine
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-5">
+          {CATEGORY_FILTERS.filter((category) => category !== "All").map(
+            (category) => (
+              <button
+                key={category}
+                type="button"
+                onClick={() =>
+                  setCategoryFilter(
+                    categoryFilter === category ? "All" : category,
+                  )
+                }
+                className={`rounded-lg border px-3 py-3 text-left transition ${
+                  categoryFilter === category
+                    ? getCategoryClass(category)
+                    : "border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+                }`}
+              >
+                <p className="text-xs font-semibold">{category}</p>
+
+                <p className="mt-1 text-lg font-bold">
+                  {categoryCounts.get(category) ?? 0}
+                </p>
+              </button>
+            ),
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-blue-900/70 bg-blue-950/20 p-6">
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Database size={18} className="text-blue-400" />
+
+              <h2 className="text-xl font-semibold text-white">
+                Market Capture / Data Depth
+              </h2>
+            </div>
+
+            <p className="mt-2 text-sm text-slate-400">
+              Background market capture stores broad auction-house aggregates.
+              Scanner results remain filtered to cleaner opportunities.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => loadCaptureSummary(realm)}
+            disabled={captureLoading}
+            className="inline-flex items-center gap-2 rounded-lg border border-blue-800 bg-blue-950/50 px-4 py-2 text-sm font-semibold text-blue-300 transition hover:bg-blue-900/40 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw
+              size={15}
+              className={captureLoading ? "animate-spin" : ""}
+            />
+            Refresh Capture
+          </button>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-4">
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500">
+              <Database size={14} />
+              Captured Items
+            </div>
+
+            <p className="text-3xl font-bold text-blue-400">
+              {captureLoading
+                ? "..."
+                : captureSummary.item_count.toLocaleString()}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Latest usable aggregated rows
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500">
+              <BarChart3 size={14} />
+              Total Volume
+            </div>
+
+            <p className="text-3xl font-bold text-emerald-400">
+              {captureLoading
+                ? "..."
+                : captureSummary.total_volume.toLocaleString()}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Total quantity captured
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500">
+              <Activity size={14} />
+              Market Value
+            </div>
+
+            <p className="text-3xl font-bold text-amber-400">
+              {captureLoading
+                ? "..."
+                : formatGold(captureSummary.total_market_value)}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Captured aggregate value
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500">
+              <Clock size={14} />
+              Latest Capture
+            </div>
+
+            <p className="text-lg font-bold text-white">
+              {formatDateTime(captureSummary.latest_capture_at)}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              {captureSummary.realm || realmName}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+            <h3 className="text-sm font-semibold text-white">
+              Top Captured Market Rows
+            </h3>
+
+            <span className="rounded-full border border-blue-800 bg-blue-950/50 px-3 py-1 text-xs text-blue-300">
+              Top {topCapturedItems.length}
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-950 text-slate-500">
+                <tr>
+                  <th className="px-4 py-3 text-left font-medium">Item ID</th>
+                  <th className="px-4 py-3 text-left font-medium">Mode</th>
+                  <th className="px-4 py-3 text-right font-medium">
+                    Min Price
+                  </th>
+                  <th className="px-4 py-3 text-right font-medium">
+                    Avg Price
+                  </th>
+                  <th className="px-4 py-3 text-right font-medium">Volume</th>
+                  <th className="px-4 py-3 text-right font-medium">
+                    Listings
+                  </th>
+                  <th className="px-4 py-3 text-right font-medium">
+                    Market Value
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {topCapturedItems.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-4 py-8 text-center text-slate-500"
+                    >
+                      No capture data yet. Run Global Sync above.
+                    </td>
+                  </tr>
+                ) : (
+                  topCapturedItems.map((item) => (
+                    <tr
+                      key={item.id}
+                      className="border-t border-slate-800 transition hover:bg-slate-900"
+                    >
+                      <td className="px-4 py-3 font-semibold text-white">
+                        #{item.item_id}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs font-semibold capitalize text-slate-300">
+                          {item.scan_mode}
+                        </span>
+                      </td>
+
+                      <td className="px-4 py-3 text-right font-semibold text-emerald-400">
+                        {formatGold(item.min_price)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-300">
+                        {formatGold(item.average_price)}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-300">
+                        {item.volume.toLocaleString()}
+                      </td>
+
+                      <td className="px-4 py-3 text-right text-slate-300">
+                        {item.listing_count.toLocaleString()}
+                      </td>
+
+                      <td className="px-4 py-3 text-right font-semibold text-amber-400">
+                        {formatGold(item.total_market_value)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-300">
+          <SlidersHorizontal size={16} />
           Scanner Controls
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-4">
+        <div className="grid gap-4 lg:grid-cols-5">
           <div className="relative">
             <Search
               size={16}
@@ -463,10 +838,22 @@ export default function MarketScanner() {
             <input
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search item, ID, quality or risk..."
+              placeholder="Search item, ID, category or risk..."
               className="w-full rounded-lg border border-slate-700 bg-slate-950 py-2 pl-10 pr-4 text-sm text-white outline-none transition focus:border-amber-500"
             />
           </div>
+
+          <select
+            value={categoryFilter}
+            onChange={(event) => setCategoryFilter(event.target.value)}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-100 outline-none transition focus:border-amber-500"
+          >
+            {CATEGORY_FILTERS.map((category) => (
+              <option key={category} value={category}>
+                Category: {category}
+              </option>
+            ))}
+          </select>
 
           <select
             value={qualityFilter}
@@ -537,6 +924,7 @@ export default function MarketScanner() {
             <thead className="bg-slate-950 text-slate-400">
               <tr>
                 <th className="px-6 py-3 text-left font-medium">Item</th>
+                <th className="px-6 py-3 text-left font-medium">Category</th>
                 <th className="px-6 py-3 text-left font-medium">Quality</th>
                 <th className="px-6 py-3 text-right font-medium">Price</th>
                 <th className="px-6 py-3 text-right font-medium">Volume</th>
@@ -551,7 +939,7 @@ export default function MarketScanner() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-6 py-12 text-center text-slate-500"
                   >
                     Loading scanner results...
@@ -560,16 +948,17 @@ export default function MarketScanner() {
               ) : filteredItems.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-6 py-12 text-center text-slate-500"
                   >
-                    No matching opportunities. Run a sync or adjust filters.
+                    No matching opportunities. Run Global Sync or adjust
+                    filters.
                   </td>
                 </tr>
               ) : (
                 filteredItems.map((item) => {
                   const isWatched = watchedKeys.has(
-                    getWatchlistKey(realm, item.item_id)
+                    getWatchlistKey(realm, item.item_id),
                   );
 
                   return (
@@ -600,7 +989,10 @@ export default function MarketScanner() {
                             </p>
 
                             <p className="mt-1 max-w-xl truncate text-xs text-slate-400">
-                              {item.reason}
+                              {item.item_class ?? "Unknown class"}
+                              {item.item_subclass
+                                ? ` · ${item.item_subclass}`
+                                : ""}
                             </p>
                           </div>
                         </div>
@@ -608,8 +1000,18 @@ export default function MarketScanner() {
 
                       <td className="px-6 py-4">
                         <span
+                          className={`rounded-full border px-3 py-1 text-xs font-semibold ${getCategoryClass(
+                            item.goldsmith_category,
+                          )}`}
+                        >
+                          {item.goldsmith_category}
+                        </span>
+                      </td>
+
+                      <td className="px-6 py-4">
+                        <span
                           className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${getQualityClass(
-                            item.quality
+                            item.quality,
                           )}`}
                         >
                           {item.quality ?? "unknown"}
@@ -631,7 +1033,7 @@ export default function MarketScanner() {
                       <td className="px-6 py-4 text-right">
                         <span
                           className={`font-bold ${getScoreClass(
-                            item.opportunity_score
+                            item.opportunity_score,
                           )}`}
                         >
                           {formatScore(item.opportunity_score)}
@@ -641,7 +1043,7 @@ export default function MarketScanner() {
                       <td className="px-6 py-4">
                         <span
                           className={`rounded-full border px-3 py-1 text-xs font-semibold ${getRiskClass(
-                            item.risk_level
+                            item.risk_level,
                           )}`}
                         >
                           {item.risk_level}
@@ -687,12 +1089,13 @@ export default function MarketScanner() {
 
             <div>
               <h3 className="font-semibold text-emerald-300">
-                Scanner ready
+                Category Engine active
               </h3>
 
               <p className="mt-1 text-sm text-slate-400">
-                Watchlist actions now update without rebuilding the full page,
-                so your scroll position should stay where it is.
+                GoldSmith now scores and filters opportunities by market type,
+                so fast-moving items and slow-margin items are handled
+                differently.
               </p>
             </div>
           </div>

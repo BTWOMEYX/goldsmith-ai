@@ -26,6 +26,9 @@ def serialize_tracked_item(item: TrackedItem) -> dict:
         "reason": item.reason,
         "icon_url": item.icon_url,
         "quality": item.quality,
+        "item_class": item.item_class,
+        "item_subclass": item.item_subclass,
+        "goldsmith_category": item.goldsmith_category,
         "profit_margin": item.profit_margin,
         "created_at": item.created_at.isoformat()
         if item.created_at

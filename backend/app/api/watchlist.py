@@ -27,6 +27,9 @@ class WatchlistItemPayload(BaseModel):
     reason: str | None = None
     icon_url: str | None = None
     quality: str | None = None
+    item_class: str | None = None
+    item_subclass: str | None = None
+    goldsmith_category: str = "Unknown / Other"
     profit_margin: float = 0
 
 
@@ -47,6 +50,9 @@ async def serialize_watchlist_item(item: WatchlistItem) -> dict:
         "reason": item.reason,
         "icon_url": item.icon_url,
         "quality": item.quality,
+        "item_class": item.item_class,
+        "item_subclass": item.item_subclass,
+        "goldsmith_category": item.goldsmith_category,
         "profit_margin": item.profit_margin,
         "saved_at": item.created_at.isoformat()
         if item.created_at
@@ -112,6 +118,9 @@ async def add_to_watchlist(
             existing_item.reason = payload.reason
             existing_item.icon_url = payload.icon_url
             existing_item.quality = payload.quality
+            existing_item.item_class = payload.item_class
+            existing_item.item_subclass = payload.item_subclass
+            existing_item.goldsmith_category = payload.goldsmith_category
             existing_item.profit_margin = payload.profit_margin
 
             await db.commit()
@@ -136,6 +145,9 @@ async def add_to_watchlist(
             reason=payload.reason,
             icon_url=payload.icon_url,
             quality=payload.quality,
+            item_class=payload.item_class,
+            item_subclass=payload.item_subclass,
+            goldsmith_category=payload.goldsmith_category,
             profit_margin=payload.profit_margin,
         )
 

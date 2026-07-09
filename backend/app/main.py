@@ -3,22 +3,29 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.action_center import router as action_center_router
+from app.api.autopilot import router as autopilot_router
+from app.api.capture import router as capture_router
+from app.api.dashboard import router as dashboard_router
+from app.api.deals import router as deals_router
+from app.api.health import router as health_router
+from app.api.ignore_rules import router as ignore_rules_router
+from app.api.history import router as history_router
+from app.api.realms import router as realms_router
+from app.api.signals import router as signals_router
+from app.api.sync import router as sync_router
+from app.api.sync_jobs import router as sync_jobs_router
+from app.api.watchlist import router as watchlist_router
+from app.utils.schema import ensure_database_schema
 from database import engine
 from models import Base
-
-from app.api.health import router as health_router
-from app.api.dashboard import router as dashboard_router
-from app.api.sync import router as sync_router
-from app.api.watchlist import router as watchlist_router
-from app.api.history import router as history_router
-from app.api.signals import router as signals_router
-from app.api.realms import router as realms_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await ensure_database_schema(conn)
 
     yield
 
@@ -43,12 +50,18 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(action_center_router)
+app.include_router(autopilot_router)
 app.include_router(dashboard_router)
 app.include_router(sync_router)
+app.include_router(sync_jobs_router)
 app.include_router(watchlist_router)
 app.include_router(history_router)
+app.include_router(ignore_rules_router)
 app.include_router(signals_router)
 app.include_router(realms_router)
+app.include_router(capture_router)
+app.include_router(deals_router)
 
 
 @app.get("/")

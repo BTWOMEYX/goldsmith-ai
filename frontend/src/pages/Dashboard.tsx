@@ -1,164 +1,175 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import axios from "axios";
 import {
-  Activity,
   AlertTriangle,
+  BellRing,
   CheckCircle2,
+  Compass,
+  Eye,
   RefreshCw,
-  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  Star,
   TrendingDown,
   Zap,
 } from "lucide-react";
 
 import RealmSelect from "../components/RealmSelect";
 
-type TrackedItem = {
-  id: number;
-  item_id: number;
-  name: string;
-  current_price: number;
-  volume: number;
-  listing_count: number;
-  opportunity_score: number;
-  risk_level: string;
-  reason: string | null;
-  icon_url: string | null;
-  quality: string | null;
-  profit_margin: number;
+type TopAction = {
+  type: string;
+  title: string;
+  priority: string;
+  summary: string;
+  action: string;
+  target_page: string;
+  button_label: string;
 };
 
-type DashboardResponse = {
-  status: string;
-  connected_realm_id: number;
-  realm: string;
-  item_count: number;
-  items: TrackedItem[];
-};
-
-type SignalItem = {
+type DealAlert = {
   item_id: number;
   realm_id: number;
-  realm_name: string;
   name: string;
   current_price: number;
   previous_price: number | null;
   price_change: number;
   price_change_percent: number;
   volume: number;
-  previous_volume: number | null;
-  volume_change: number;
-  volume_change_percent: number;
   listing_count: number;
   opportunity_score: number;
-  previous_score: number | null;
-  score_change: number;
   risk_level: string;
   reason: string | null;
   icon_url: string | null;
   quality: string | null;
-  snapshot_count: number;
-  last_seen: string | null;
+  item_class: string | null;
+  item_subclass: string | null;
+  goldsmith_category: string;
   signal: string;
   signal_label: string;
-  signal_priority: number;
   signal_action: string;
-  signal_tone: string;
   signal_confidence: number;
   signal_reason: string;
   is_watched: boolean;
+  suggested_buy_below: number;
+  target_resale_price: number;
+  estimated_profit_before_costs: number;
+  estimated_margin_percent: number;
 };
 
-type SignalSummary = {
-  strong_buy_count: number;
-  buy_watch_count: number;
-  price_drop_count: number;
-  score_improving_count: number;
-  hold_count: number;
-  avoid_count: number;
+type WatchlistPriorityItem = {
+  id: number;
+  item_id: number;
+  realm_id: number;
+  realm_name: string;
+  name: string;
+  current_price: number;
+  volume: number;
+  listing_count: number;
+  opportunity_score: number;
+  risk_level: string;
+  reason: string | null;
+  icon_url: string | null;
+  quality: string | null;
+  item_class: string | null;
+  item_subclass: string | null;
+  goldsmith_category: string;
+  profit_margin: number;
+  saved_at: string | null;
 };
 
-type SignalsResponse = {
+type CategoryFocus = {
+  category: string;
+  alert_count: number;
+  actionable_count: number;
+  average_confidence: number;
+  best_signal: string;
+};
+
+type ActionCenterResponse = {
   status: string;
   connected_realm_id: number;
   realm: string;
-  signal_count: number;
-  top_signal: SignalItem | null;
-  summary: SignalSummary;
-  items: SignalItem[];
+  top_action: TopAction;
+  top_alert: DealAlert | null;
+  actions: DealAlert[];
+  watchlist_priority: WatchlistPriorityItem[];
+  category_focus: CategoryFocus[];
+  summary: {
+    tracked_count: number;
+    alert_count: number;
+    actionable_count: number;
+    auto_watch_ready_count: number;
+    watchlist_count: number;
+    capture: {
+      latest_capture_at: string | null;
+      item_count: number;
+      total_volume: number;
+      total_market_value: number;
+    };
+    deals: {
+      auto_watch_count: number;
+      fast_mover_count: number;
+      price_drop_count: number;
+      high_margin_count: number;
+      watch_candidate_count: number;
+      hold_count: number;
+      avoid_count: number;
+    };
+  };
+  error?: string;
 };
 
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
-const EMPTY_SIGNAL_SUMMARY: SignalSummary = {
-  strong_buy_count: 0,
-  buy_watch_count: 0,
-  price_drop_count: 0,
-  score_improving_count: 0,
-  hold_count: 0,
-  avoid_count: 0,
-};
+function formatGold(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return "-";
+  }
 
-function getQualityClass(quality: string | null) {
-  switch (quality?.toLowerCase()) {
-    case "poor":
-      return "text-slate-500 border-slate-700 bg-slate-900";
-    case "common":
-      return "text-slate-200 border-slate-600 bg-slate-800";
-    case "uncommon":
-      return "text-green-400 border-green-800 bg-green-950/40";
-    case "rare":
-      return "text-blue-400 border-blue-800 bg-blue-950/40";
-    case "epic":
-      return "text-purple-400 border-purple-800 bg-purple-950/40";
-    case "legendary":
-      return "text-orange-400 border-orange-800 bg-orange-950/40";
-    default:
-      return "text-slate-400 border-slate-700 bg-slate-900";
+  return `${Math.round(value).toLocaleString()}g`;
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) {
+    return "No capture yet";
+  }
+
+  try {
+    return new Intl.DateTimeFormat("en-AU", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return "Unknown";
   }
 }
 
-function getRiskClass(riskLevel: string) {
-  switch (riskLevel.toLowerCase()) {
-    case "low":
-      return "text-emerald-400 border-emerald-800 bg-emerald-950/40";
-    case "medium":
-      return "text-amber-400 border-amber-800 bg-amber-950/40";
+function getPriorityClass(priority: string) {
+  switch (priority.toLowerCase()) {
     case "high":
-      return "text-red-400 border-red-800 bg-red-950/40";
+      return "border-emerald-800 bg-emerald-950/30 text-emerald-300";
+    case "medium":
+      return "border-amber-800 bg-amber-950/30 text-amber-300";
     default:
-      return "text-slate-400 border-slate-700 bg-slate-900";
+      return "border-slate-800 bg-slate-950 text-slate-300";
   }
-}
-
-function getScoreClass(score: number) {
-  if (score >= 80) {
-    return "text-emerald-400";
-  }
-
-  if (score >= 60) {
-    return "text-blue-400";
-  }
-
-  if (score >= 40) {
-    return "text-amber-400";
-  }
-
-  return "text-red-400";
 }
 
 function getSignalClass(signal: string) {
   switch (signal) {
-    case "STRONG_BUY":
-      return "border-emerald-700 bg-emerald-950/50 text-emerald-300";
-    case "BUY_WATCH":
-      return "border-blue-700 bg-blue-950/50 text-blue-300";
+    case "AUTO_WATCH":
+      return "border-emerald-800 bg-emerald-950/40 text-emerald-300";
+    case "FAST_MOVER":
+      return "border-blue-800 bg-blue-950/40 text-blue-300";
     case "PRICE_DROP":
-      return "border-purple-700 bg-purple-950/50 text-purple-300";
-    case "SCORE_IMPROVING":
-      return "border-cyan-700 bg-cyan-950/50 text-cyan-300";
+      return "border-purple-800 bg-purple-950/40 text-purple-300";
+    case "HIGH_MARGIN":
+      return "border-amber-800 bg-amber-950/40 text-amber-300";
     case "AVOID":
-      return "border-red-700 bg-red-950/50 text-red-300";
-    case "HOLD":
+      return "border-red-800 bg-red-950/40 text-red-300";
     default:
       return "border-slate-700 bg-slate-950 text-slate-300";
   }
@@ -166,160 +177,101 @@ function getSignalClass(signal: string) {
 
 function getSignalIcon(signal: string) {
   switch (signal) {
-    case "STRONG_BUY":
-      return <Zap size={16} />;
-    case "BUY_WATCH":
-      return <CheckCircle2 size={16} />;
+    case "AUTO_WATCH":
+      return <Zap size={15} />;
+    case "FAST_MOVER":
+      return <CheckCircle2 size={15} />;
     case "PRICE_DROP":
-      return <TrendingDown size={16} />;
-    case "SCORE_IMPROVING":
-      return <Activity size={16} />;
+      return <TrendingDown size={15} />;
+    case "HIGH_MARGIN":
+      return <Star size={15} />;
     case "AVOID":
-      return <ShieldAlert size={16} />;
-    case "HOLD":
+      return <AlertTriangle size={15} />;
     default:
-      return <AlertTriangle size={16} />;
+      return <BellRing size={15} />;
   }
 }
 
-function formatGold(value: number | null) {
-  if (value === null) {
-    return "-";
+function getRiskClass(riskLevel: string) {
+  switch (riskLevel.toLowerCase()) {
+    case "low":
+      return "text-emerald-400";
+    case "medium":
+      return "text-amber-400";
+    case "high":
+      return "text-red-400";
+    default:
+      return "text-slate-400";
   }
-
-  return `${Math.round(value).toLocaleString()}g`;
-}
-
-function formatScore(value: number) {
-  return `${value.toFixed(1)}/100`;
 }
 
 export default function Dashboard() {
   const [realm, setRealm] = useState(11);
-  const [realmName, setRealmName] = useState("Illidan");
-  const [items, setItems] = useState<TrackedItem[]>([]);
-  const [signals, setSignals] = useState<SignalItem[]>([]);
-  const [topSignal, setTopSignal] = useState<SignalItem | null>(null);
-  const [signalSummary, setSignalSummary] =
-    useState<SignalSummary>(EMPTY_SIGNAL_SUMMARY);
-
+  const [data, setData] = useState<ActionCenterResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
 
-  async function loadDashboard(realmId: number) {
+  async function loadActionCenter(realmId: number) {
     try {
       setLoading(true);
 
-      const [dashboardResponse, signalsResponse] = await Promise.all([
-        axios.get<DashboardResponse>(
-          `${API_BASE_URL}/dashboard?connected_realm_id=${realmId}`
-        ),
-        axios.get<SignalsResponse>(
-          `${API_BASE_URL}/signals?connected_realm_id=${realmId}`
-        ),
-      ]);
+      const response = await axios.get<ActionCenterResponse>(
+        `${API_BASE_URL}/action-center?connected_realm_id=${realmId}`,
+      );
 
-      setRealmName(dashboardResponse.data.realm);
-      setItems(dashboardResponse.data.items ?? []);
-      setSignals(signalsResponse.data.items ?? []);
-      setTopSignal(signalsResponse.data.top_signal ?? null);
-      setSignalSummary(signalsResponse.data.summary ?? EMPTY_SIGNAL_SUMMARY);
-      setError("");
+      setData(response.data);
+      setError(response.data.status === "Error" ? response.data.error ?? "" : "");
     } catch {
-      setItems([]);
-      setSignals([]);
-      setTopSignal(null);
-      setSignalSummary(EMPTY_SIGNAL_SUMMARY);
-      setError("Unable to connect to backend.");
+      setData(null);
+      setError("Unable to load Action Center.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function syncRealm() {
-    try {
-      setSyncing(true);
-      setError("");
-
-      await axios.post(
-        `${API_BASE_URL}/sync-auctions?connected_realm_id=${realm}`
-      );
-
-      await loadDashboard(realm);
-    } catch {
-      setError("Auction sync failed.");
-    } finally {
-      setSyncing(false);
-    }
-  }
-
   useEffect(() => {
-    loadDashboard(realm);
+    loadActionCenter(realm);
   }, [realm]);
 
-  const signalByItemId = useMemo(() => {
-    const signalMap = new Map<number, SignalItem>();
-
-    signals.forEach((signal) => {
-      signalMap.set(signal.item_id, signal);
-    });
-
-    return signalMap;
-  }, [signals]);
-
-  const totalItems = items.length;
-
-  const bestItem = useMemo(() => {
-    if (!items.length) {
-      return null;
+  useEffect(() => {
+    function handleGlobalSyncComplete() {
+      loadActionCenter(realm);
     }
 
-    return [...items].sort(
-      (a, b) => b.opportunity_score - a.opportunity_score
-    )[0];
-  }, [items]);
+    window.addEventListener("goldsmith-sync-complete", handleGlobalSyncComplete);
 
-  const averagePrice = useMemo(() => {
-    if (!items.length) {
-      return 0;
-    }
+    return () => {
+      window.removeEventListener(
+        "goldsmith-sync-complete",
+        handleGlobalSyncComplete,
+      );
+    };
+  }, [realm]);
 
-    return (
-      items.reduce((sum, item) => sum + item.current_price, 0) / items.length
-    );
-  }, [items]);
+  const topAction = data?.top_action;
+  const topAlert = data?.top_alert;
+  const summary = data?.summary;
 
-  const averageScore = useMemo(() => {
-    if (!items.length) {
-      return 0;
-    }
+  const bestActions = useMemo(() => {
+    return data?.actions.slice(0, 3) ?? [];
+  }, [data]);
 
-    return (
-      items.reduce((sum, item) => sum + item.opportunity_score, 0) /
-      items.length
-    );
-  }, [items]);
-
-  const actionableSignalCount = useMemo(() => {
-    return (
-      signalSummary.strong_buy_count +
-      signalSummary.buy_watch_count +
-      signalSummary.price_drop_count +
-      signalSummary.score_improving_count
-    );
-  }, [signalSummary]);
+  const watchlistPriority = useMemo(() => {
+    return data?.watchlist_priority.slice(0, 3) ?? [];
+  }, [data]);
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-white">
-            {realmName} Market Overview
-          </h2>
+          <div className="flex items-center gap-2">
+            <Sparkles size={22} className="text-amber-400" />
+            <h2 className="text-2xl font-bold text-white">Action Center</h2>
+          </div>
 
           <p className="mt-1 text-sm text-slate-400">
-            Live auction intelligence with opportunity scoring and buy signals.
+            One clear command page. Use this first, then open detail pages only
+            when needed.
           </p>
         </div>
 
@@ -327,344 +279,345 @@ export default function Dashboard() {
           <RealmSelect value={realm} onChange={setRealm} />
 
           <button
-            onClick={syncRealm}
-            disabled={syncing}
-            className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-5 py-2 text-sm font-semibold text-black transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+            type="button"
+            onClick={() => loadActionCenter(realm)}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-5 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RefreshCw size={16} className={syncing ? "animate-spin" : ""} />
-
-            {syncing ? "Syncing..." : "Sync Auctions"}
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+            Refresh
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-800 bg-red-950/60 p-4 text-sm text-red-300">
+        <div className="rounded-xl border border-red-800 bg-red-950/50 p-4 text-sm text-red-300">
           {error}
         </div>
       )}
 
-      <div className="grid gap-6 md:grid-cols-4">
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Tracked Opportunities</p>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="rounded-2xl border border-amber-800 bg-amber-950/20 p-6 lg:col-span-2">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-wide text-amber-300">
+                Do This Next
+              </p>
 
-          <h3 className="mt-2 text-4xl font-bold text-white">
-            {loading ? "..." : totalItems}
-          </h3>
-        </div>
+              <h3 className="mt-2 text-3xl font-bold text-white">
+                {loading ? "Loading..." : topAction?.title ?? "No action"}
+              </h3>
+            </div>
 
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Best Opportunity</p>
+            {topAction && (
+              <span
+                className={`rounded-full border px-3 py-1 text-xs font-semibold ${getPriorityClass(
+                  topAction.priority,
+                )}`}
+              >
+                {topAction.priority} Priority
+              </span>
+            )}
+          </div>
 
-          <h3 className="mt-2 truncate text-lg font-bold text-emerald-400">
-            {bestItem?.name ?? "-"}
-          </h3>
-
-          <p className="mt-1 text-sm text-slate-400">
-            {bestItem ? formatScore(bestItem.opportunity_score) : ""}
+          <p className="text-lg text-slate-300">
+            {topAction?.summary ?? "GoldSmith is checking what needs attention."}
           </p>
-        </div>
 
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Average Price</p>
-
-          <h3 className="mt-2 text-4xl font-bold text-amber-400">
-            {loading ? "..." : formatGold(averagePrice)}
-          </h3>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <p className="text-sm text-slate-400">Actionable Signals</p>
-
-          <h3 className="mt-2 text-4xl font-bold text-blue-400">
-            {loading ? "..." : actionableSignalCount}
-          </h3>
-
-          <p className="mt-1 text-xs text-slate-500">
-            Avg. score {formatScore(averageScore)}
+          <p className="mt-3 text-sm text-slate-400">
+            {topAction?.action ?? ""}
           </p>
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            {topAction && topAction.target_page !== "/" ? (
+              <Link
+                to={topAction.target_page}
+                className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-5 py-3 text-sm font-bold text-black transition hover:bg-amber-400"
+              >
+                <Compass size={17} />
+                {topAction.button_label}
+              </Link>
+            ) : (
+              <span className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-5 py-3 text-sm font-semibold text-slate-300">
+                <Compass size={17} />
+                Use Global Sync Above
+              </span>
+            )}
+
+            <Link
+              to="/alerts"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-5 py-3 text-sm font-semibold text-slate-200 transition hover:bg-slate-800"
+            >
+              <BellRing size={17} />
+              Deal Queue
+            </Link>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+            Market Health
+          </p>
+
+          <div className="mt-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-slate-400">Actionable</span>
+              <span className="text-2xl font-bold text-emerald-400">
+                {loading ? "..." : summary?.actionable_count ?? 0}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-slate-400">Auto-Watch Ready</span>
+              <span className="text-2xl font-bold text-amber-400">
+                {loading ? "..." : summary?.auto_watch_ready_count ?? 0}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-slate-400">Watched</span>
+              <span className="text-2xl font-bold text-blue-400">
+                {loading ? "..." : summary?.watchlist_count ?? 0}
+              </span>
+            </div>
+
+            <div className="border-t border-slate-800 pt-4">
+              <p className="text-xs text-slate-500">Latest capture</p>
+              <p className="mt-1 text-sm font-semibold text-white">
+                {formatDateTime(summary?.capture.latest_capture_at ?? null)}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 lg:col-span-2">
-          <div className="mb-4 flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-semibold text-white">
-                GoldSmith Signal Engine
-              </h2>
+      {topAlert && (
+        <div className="rounded-2xl border border-emerald-800 bg-emerald-950/20 p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-start gap-4">
+              {topAlert.icon_url ? (
+                <img
+                  src={topAlert.icon_url}
+                  alt={topAlert.name}
+                  className="h-14 w-14 rounded-xl border border-slate-700 bg-slate-950"
+                />
+              ) : (
+                <div className="h-14 w-14 rounded-xl border border-slate-700 bg-slate-950" />
+              )}
 
+              <div>
+                <div
+                  className={`mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
+                    topAlert.signal,
+                  )}`}
+                >
+                  {getSignalIcon(topAlert.signal)}
+                  {topAlert.signal_label}
+                </div>
+
+                <h3 className="text-xl font-bold text-white">
+                  {topAlert.name}
+                </h3>
+
+                <p className="mt-1 text-sm text-slate-400">
+                  {topAlert.signal_action}
+                </p>
+              </div>
+            </div>
+
+            <div className="text-right">
+              <p className="text-xs text-slate-500">Confidence</p>
+              <p className="text-3xl font-bold text-emerald-400">
+                {topAlert.signal_confidence.toFixed(1)}%
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Buy below {formatGold(topAlert.suggested_buy_below)}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <div className="mb-5 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-white">Best Actions</h3>
               <p className="mt-1 text-sm text-slate-400">
-                Prioritised buy, watch and avoid signals from price history,
-                score movement and market depth.
+                Only the top few items. Open Deal Alerts for the full queue.
               </p>
             </div>
 
-            <span className="rounded-full border border-blue-800 bg-blue-950/50 px-3 py-1 text-xs font-semibold text-blue-400">
-              {signals.length} signals
-            </span>
+            <Link
+              to="/alerts"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-800"
+            >
+              <Eye size={14} />
+              Details
+            </Link>
           </div>
 
-          {topSignal ? (
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-5">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="flex items-start gap-4">
-                  {topSignal.icon_url ? (
-                    <img
-                      src={topSignal.icon_url}
-                      alt={topSignal.name}
-                      className="h-14 w-14 rounded-lg border border-slate-700 bg-slate-950"
-                    />
-                  ) : (
-                    <div className="h-14 w-14 rounded-lg border border-slate-700 bg-slate-950" />
-                  )}
-
-                  <div>
-                    <div
-                      className={`mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
-                        topSignal.signal
-                      )}`}
-                    >
-                      {getSignalIcon(topSignal.signal)}
-                      {topSignal.signal_label}
+          <div className="space-y-3">
+            {bestActions.length === 0 ? (
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-5 text-sm text-slate-500">
+                No actions yet. Run Global Sync above.
+              </div>
+            ) : (
+              bestActions.map((action) => (
+                <div
+                  key={`${action.realm_id}-${action.item_id}`}
+                  className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-white">{action.name}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {action.goldsmith_category} ·{" "}
+                        <span className={getRiskClass(action.risk_level)}>
+                          {action.risk_level} risk
+                        </span>
+                      </p>
                     </div>
 
-                    <h3 className="text-lg font-bold text-white">
-                      {topSignal.name}
-                    </h3>
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-semibold ${getSignalClass(
+                        action.signal,
+                      )}`}
+                    >
+                      {getSignalIcon(action.signal)}
+                      {action.signal_label}
+                    </span>
+                  </div>
 
-                    <p className="mt-1 text-sm text-slate-400">
-                      {topSignal.signal_action}
+                  <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <p className="text-slate-500">Current</p>
+                      <p className="mt-1 font-bold text-emerald-400">
+                        {formatGold(action.current_price)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-slate-500">Buy Below</p>
+                      <p className="mt-1 font-bold text-blue-400">
+                        {formatGold(action.suggested_buy_below)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-slate-500">Target</p>
+                      <p className="mt-1 font-bold text-amber-400">
+                        {formatGold(action.target_resale_price)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <div className="mb-5 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-white">Category Focus</h3>
+              <p className="mt-1 text-sm text-slate-400">
+                The markets GoldSmith thinks deserve attention now.
+              </p>
+            </div>
+
+            <ShieldCheck size={20} className="text-emerald-400" />
+          </div>
+
+          <div className="space-y-3">
+            {data?.category_focus.length === 0 ? (
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-5 text-sm text-slate-500">
+                No category focus yet.
+              </div>
+            ) : (
+              data?.category_focus.map((category) => (
+                <div
+                  key={category.category}
+                  className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950 p-4"
+                >
+                  <div>
+                    <p className="font-semibold text-white">
+                      {category.category}
                     </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {category.best_signal} · {category.alert_count} alert
+                      {category.alert_count === 1 ? "" : "s"}
+                    </p>
+                  </div>
 
-                    <p className="mt-2 text-xs text-slate-500">
-                      {topSignal.signal_reason}
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-emerald-400">
+                      {category.actionable_count} actionable
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {category.average_confidence}% avg confidence
                     </p>
                   </div>
                 </div>
-
-                <div className="text-right">
-                  <p className="text-xs text-slate-500">Confidence</p>
-
-                  <p className="text-3xl font-bold text-emerald-400">
-                    {topSignal.signal_confidence.toFixed(1)}%
-                  </p>
-
-                  <p className="mt-1 text-xs text-slate-500">
-                    {formatGold(topSignal.current_price)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-8 text-center text-slate-500">
-              No signals yet for this realm. Click Sync Auctions to create the
-              first snapshot.
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <h2 className="text-xl font-semibold text-white">
-            Signal Breakdown
-          </h2>
-
-          <div className="mt-5 space-y-3">
-            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
-              <span className="text-sm text-emerald-400">Strong Buy</span>
-              <span className="font-bold text-white">
-                {signalSummary.strong_buy_count}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
-              <span className="text-sm text-blue-400">Buy Watch</span>
-              <span className="font-bold text-white">
-                {signalSummary.buy_watch_count}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
-              <span className="text-sm text-purple-400">Price Drop</span>
-              <span className="font-bold text-white">
-                {signalSummary.price_drop_count}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
-              <span className="text-sm text-cyan-400">Score Improving</span>
-              <span className="font-bold text-white">
-                {signalSummary.score_improving_count}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
-              <span className="text-sm text-slate-400">Hold</span>
-              <span className="font-bold text-white">
-                {signalSummary.hold_count}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg bg-slate-950 px-4 py-3">
-              <span className="text-sm text-red-400">Avoid</span>
-              <span className="font-bold text-white">
-                {signalSummary.avoid_count}
-              </span>
-            </div>
+              ))
+            )}
           </div>
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-        <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div className="mb-5 flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-xl font-semibold text-white">
-              Market Opportunities
-            </h2>
-
+            <h3 className="text-lg font-bold text-white">
+              Watchlist Priority
+            </h3>
             <p className="mt-1 text-sm text-slate-400">
-              Ranked opportunities with live buy signals.
+              Saved targets that need review. The Watchlist page is for detail.
             </p>
           </div>
 
-          <span className="rounded-full border border-emerald-800 bg-emerald-950/50 px-3 py-1 text-xs font-semibold text-emerald-400">
-            Live Data
-          </span>
+          <Link
+            to="/watchlist"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-800"
+          >
+            <Star size={14} />
+            Open Watchlist
+          </Link>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-950 text-slate-400">
-              <tr>
-                <th className="px-6 py-3 text-left font-medium">Item</th>
-                <th className="px-6 py-3 text-left font-medium">Signal</th>
-                <th className="px-6 py-3 text-left font-medium">Quality</th>
-                <th className="px-6 py-3 text-right font-medium">Price</th>
-                <th className="px-6 py-3 text-right font-medium">Volume</th>
-                <th className="px-6 py-3 text-right font-medium">Score</th>
-                <th className="px-6 py-3 text-left font-medium">Risk</th>
-              </tr>
-            </thead>
+        {watchlistPriority.length === 0 ? (
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-5 text-sm text-slate-500">
+            Nothing watched yet. Auto Watch will add high-confidence deals after
+            scans.
+          </div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-3">
+            {watchlistPriority.map((item) => (
+              <div
+                key={`${item.realm_id}-${item.item_id}`}
+                className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+              >
+                <p className="truncate font-semibold text-white">
+                  {item.name}
+                </p>
 
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td
-                    colSpan={7}
-                    className="px-6 py-12 text-center text-slate-500"
-                  >
-                    Loading market data...
-                  </td>
-                </tr>
-              ) : items.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={7}
-                    className="px-6 py-12 text-center text-slate-500"
-                  >
-                    No auction data yet for this realm. Click Sync Auctions to
-                    begin.
-                  </td>
-                </tr>
-              ) : (
-                items.map((item) => {
-                  const signal = signalByItemId.get(item.item_id);
+                <p className="mt-1 text-xs text-slate-500">
+                  {item.goldsmith_category}
+                </p>
 
-                  return (
-                    <tr
-                      key={item.id}
-                      className="border-t border-slate-800 transition hover:bg-slate-800/40"
-                      title={signal?.signal_reason ?? item.reason ?? ""}
-                    >
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          {item.icon_url ? (
-                            <img
-                              src={item.icon_url}
-                              alt={item.name}
-                              className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950"
-                            />
-                          ) : (
-                            <div className="h-10 w-10 rounded-lg border border-slate-700 bg-slate-950" />
-                          )}
+                <div className="mt-4 flex items-center justify-between">
+                  <span className="font-bold text-emerald-400">
+                    {formatGold(item.current_price)}
+                  </span>
 
-                          <div>
-                            <p className="font-semibold text-white">
-                              {item.name}
-                            </p>
-
-                            <p className="text-xs text-slate-500">
-                              Item #{item.item_id} · {item.listing_count} listings
-                            </p>
-
-                            <p className="mt-1 max-w-xl truncate text-xs text-slate-400">
-                              {signal?.signal_action ?? item.reason}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-
-                      <td className="px-6 py-4">
-                        {signal ? (
-                          <span
-                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
-                              signal.signal
-                            )}`}
-                          >
-                            {getSignalIcon(signal.signal)}
-                            {signal.signal_label}
-                          </span>
-                        ) : (
-                          <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs text-slate-400">
-                            No Signal
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="px-6 py-4">
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${getQualityClass(
-                            item.quality
-                          )}`}
-                        >
-                          {item.quality ?? "unknown"}
-                        </span>
-                      </td>
-
-                      <td className="px-6 py-4 text-right font-semibold text-emerald-400">
-                        {formatGold(item.current_price)}
-                      </td>
-
-                      <td className="px-6 py-4 text-right font-semibold text-slate-200">
-                        {item.volume.toLocaleString()}
-                      </td>
-
-                      <td className="px-6 py-4 text-right">
-                        <span
-                          className={`font-bold ${getScoreClass(
-                            item.opportunity_score
-                          )}`}
-                        >
-                          {formatScore(item.opportunity_score)}
-                        </span>
-                      </td>
-
-                      <td className="px-6 py-4">
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-semibold ${getRiskClass(
-                            item.risk_level
-                          )}`}
-                        >
-                          {item.risk_level}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                  <span className={`text-xs ${getRiskClass(item.risk_level)}`}>
+                    {item.risk_level}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
