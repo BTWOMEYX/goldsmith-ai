@@ -22,6 +22,7 @@ import DealAlerts from "./pages/DealAlerts";
 import MarketScanner from "./pages/MarketScanner";
 import PerformanceFeedback from "./pages/PerformanceFeedback";
 import ProfitTracker from "./pages/ProfitTracker";
+import SellPlan from "./pages/SellPlan";
 import SettingsPage from "./pages/Settings";
 import Watchlist from "./pages/Watchlist";
 
@@ -41,6 +42,12 @@ const navItems = [
     label: "Buy Queue",
     path: "/buy-queue",
     icon: ShoppingCart,
+    simple: true,
+  },
+  {
+    label: "Sell Plan",
+    path: "/sell-plan",
+    icon: BadgeDollarSign,
     simple: true,
   },
   {
@@ -318,6 +325,7 @@ export default function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/alerts" element={<DealAlerts />} />
               <Route path="/buy-queue" element={<BuyQueue />} />
+              <Route path="/sell-plan" element={<SellPlan />} />
               <Route path="/profit" element={<ProfitTracker />} />
               <Route path="/feedback" element={<PerformanceFeedback />} />
               <Route path="/markets" element={<MarketScanner />} />

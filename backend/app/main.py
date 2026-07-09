@@ -17,6 +17,7 @@ from app.api.performance_feedback import router as performance_feedback_router
 from app.api.plan_item_actions import router as plan_item_actions_router
 from app.api.history import router as history_router
 from app.api.realms import router as realms_router
+from app.api.sell_plan import router as sell_plan_router
 from app.api.signals import router as signals_router
 from app.api.sync import router as sync_router
 from app.api.strategy import router as strategy_router
@@ -74,6 +75,7 @@ app.include_router(performance_feedback_router)
 app.include_router(plan_item_actions_router)
 app.include_router(signals_router)
 app.include_router(realms_router)
+app.include_router(sell_plan_router)
 app.include_router(capture_router)
 app.include_router(deals_router)
 
