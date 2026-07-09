@@ -76,9 +76,60 @@ def calculate_deal_confidence(
     return round(max(1, min(confidence, 100)), 1)
 
 
-def get_price_targets(item: TrackedItem) -> dict:
+def apply_market_memory_to_confidence(
+    base_confidence: float,
+    market_memory: dict,
+) -> float:
+    adjusted_confidence = base_confidence
+
+    price_state = market_memory.get("price_state", "Learning")
+    memory_confidence = market_memory.get("memory_confidence", "Low")
+    volatility_score = float(market_memory.get("volatility_score") or 0)
+    sample_count = int(market_memory.get("sample_count") or 0)
+
+    if price_state == "Deep Undervalued":
+        adjusted_confidence += 14
+    elif price_state == "Undervalued":
+        adjusted_confidence += 9
+    elif price_state == "Below Normal":
+        adjusted_confidence += 4
+    elif price_state == "Fair Value":
+        adjusted_confidence += 0
+    elif price_state == "Above Normal":
+        adjusted_confidence -= 6
+    elif price_state == "Overpriced":
+        adjusted_confidence -= 18
+    elif price_state == "Volatile":
+        adjusted_confidence -= 14
+    elif price_state == "Learning":
+        adjusted_confidence -= 5
+
+    if memory_confidence == "High":
+        adjusted_confidence += 4
+    elif memory_confidence == "Medium":
+        adjusted_confidence += 2
+    elif memory_confidence == "Low":
+        adjusted_confidence -= 2
+
+    if volatility_score >= 70:
+        adjusted_confidence -= 10
+    elif volatility_score >= 45:
+        adjusted_confidence -= 5
+    elif volatility_score <= 18 and sample_count >= 5:
+        adjusted_confidence += 3
+
+    return round(max(1, min(adjusted_confidence, 100)), 1)
+
+
+def get_price_targets(item: TrackedItem, market_memory: dict | None = None) -> dict:
     category = item.goldsmith_category or "Unknown / Other"
     current_price = item.current_price
+
+    memory_price_state = (
+        market_memory.get("price_state")
+        if market_memory
+        else "Learning"
+    )
 
     if category in FAST_MOVE_CATEGORIES:
         buy_below = current_price * 0.96
@@ -89,6 +140,21 @@ def get_price_targets(item: TrackedItem) -> dict:
     else:
         buy_below = current_price * 0.93
         resale_target = current_price * 1.18
+
+    average_30 = (
+        market_memory.get("average_30_day_price")
+        if market_memory
+        else None
+    )
+
+    if average_30 and average_30 > 0:
+        if memory_price_state in ["Deep Undervalued", "Undervalued"]:
+            resale_target = max(resale_target, average_30 * 0.96)
+        elif memory_price_state == "Below Normal":
+            resale_target = max(resale_target, average_30 * 0.92)
+        elif memory_price_state in ["Above Normal", "Overpriced"]:
+            buy_below = min(buy_below, average_30 * 0.82)
+            resale_target = min(resale_target, average_30 * 1.05)
 
     estimated_profit = resale_target - buy_below
     estimated_margin_percent = (
@@ -168,15 +234,145 @@ def calculate_sale_speed(
     return "Slow"
 
 
+def build_deal_signal(
+    item: TrackedItem,
+    price_change_percent: float,
+    confidence: float,
+    market_memory: dict,
+) -> dict:
+    category = item.goldsmith_category or "Unknown / Other"
+    risk = item.risk_level.lower()
+    memory_price_state = market_memory.get("price_state", "Learning")
+
+    if memory_price_state == "Overpriced":
+        return {
+            "signal": "AVOID",
+            "label": "Avoid",
+            "priority": 7,
+            "tone": "negative",
+            "action": "Market memory says this is overpriced. Do not buy.",
+        }
+
+    if memory_price_state == "Volatile" and risk != "low":
+        return {
+            "signal": "AVOID",
+            "label": "Avoid",
+            "priority": 7,
+            "tone": "negative",
+            "action": "Market memory says this is volatile and risk is not low.",
+        }
+
+    if (
+        memory_price_state == "Deep Undervalued"
+        and confidence >= 74
+        and risk in ["low", "medium"]
+        and item.volume >= 12
+    ):
+        return {
+            "signal": "MEMORY_BUY",
+            "label": "Memory Buy",
+            "priority": 1,
+            "tone": "strong",
+            "action": "Historical pricing shows a strong undervalued opportunity.",
+        }
+
+    if (
+        item.opportunity_score >= 78
+        and confidence >= 75
+        and risk in ["low", "medium"]
+        and item.volume >= 20
+        and item.listing_count >= 5
+    ):
+        return {
+            "signal": "AUTO_WATCH",
+            "label": "Auto Watch",
+            "priority": 2,
+            "tone": "strong",
+            "action": "High-confidence opportunity. Auto-watch candidate.",
+        }
+
+    if (
+        category in FAST_MOVE_CATEGORIES
+        and item.opportunity_score >= 62
+        and confidence >= 68
+        and item.volume >= 25
+        and risk in ["low", "medium"]
+    ):
+        return {
+            "signal": "FAST_MOVER",
+            "label": "Fast Mover",
+            "priority": 3,
+            "tone": "positive",
+            "action": "Fast-moving category with useful market depth.",
+        }
+
+    if (
+        price_change_percent <= -10
+        and item.opportunity_score >= 55
+        and confidence >= 62
+    ):
+        return {
+            "signal": "PRICE_DROP",
+            "label": "Price Drop",
+            "priority": 4,
+            "tone": "positive",
+            "action": "Price has dropped sharply. Check for a buying window.",
+        }
+
+    if (
+        category in SLOW_MARGIN_CATEGORIES
+        and item.current_price >= 1000
+        and item.opportunity_score >= 65
+        and confidence >= 60
+    ):
+        return {
+            "signal": "HIGH_MARGIN",
+            "label": "High Margin",
+            "priority": 5,
+            "tone": "positive",
+            "action": "Slower-moving item with higher margin potential.",
+        }
+
+    if item.opportunity_score >= 55 and risk in ["low", "medium"]:
+        return {
+            "signal": "WATCH_CANDIDATE",
+            "label": "Watch Candidate",
+            "priority": 6,
+            "tone": "neutral",
+            "action": "Worth watching, but not urgent enough for auto-watch.",
+        }
+
+    if risk == "high":
+        return {
+            "signal": "AVOID",
+            "label": "Avoid",
+            "priority": 8,
+            "tone": "negative",
+            "action": "Risk is high. Do not buy unless you verify demand.",
+        }
+
+    return {
+        "signal": "HOLD",
+        "label": "Hold",
+        "priority": 7,
+        "tone": "neutral",
+        "action": "No urgent action yet.",
+    }
+
+
 def calculate_suggested_quantity(
     item: TrackedItem,
     signal: str,
     confidence: float,
     sale_speed: str,
     suggested_buy_below: float,
+    market_memory: dict,
 ) -> int:
     category = item.goldsmith_category or "Unknown / Other"
     risk = item.risk_level.lower()
+    price_state = market_memory.get("price_state", "Learning")
+    volatility_score = float(market_memory.get("volatility_score") or 0)
+    sample_count = int(market_memory.get("sample_count") or 0)
 
     if signal == "AVOID":
         return 0
@@ -184,37 +380,56 @@ def calculate_suggested_quantity(
     if risk == "high":
         return 0
 
+    if price_state == "Overpriced":
+        return 0
+
+    if price_state == "Volatile" and volatility_score >= 65:
+        return 1 if confidence >= 80 and risk == "low" else 0
+
     if confidence < 58:
         return 0
 
     if sale_speed == "Slow" and category not in SLOW_MARGIN_CATEGORIES:
-        return 1
-
-    if category in SLOW_MARGIN_CATEGORIES:
-        if confidence >= 82 and risk == "low":
+        quantity = 1
+    elif category in SLOW_MARGIN_CATEGORIES:
+        if confidence >= 84 and risk == "low":
             quantity = 2
         else:
             quantity = 1
     elif category in FAST_MOVE_CATEGORIES:
-        if confidence >= 85:
-            quantity = max(1, int(item.volume * 0.10))
-        elif confidence >= 75:
-            quantity = max(1, int(item.volume * 0.06))
-        elif confidence >= 65:
-            quantity = max(1, int(item.volume * 0.03))
-        else:
-            quantity = 1
-
-        quantity = min(quantity, 25)
-    else:
-        if confidence >= 80:
-            quantity = max(1, int(item.volume * 0.04))
+        if confidence >= 88:
+            quantity = max(1, int(item.volume * 0.12))
+        elif confidence >= 78:
+            quantity = max(1, int(item.volume * 0.07))
         elif confidence >= 68:
-            quantity = max(1, int(item.volume * 0.02))
+            quantity = max(1, int(item.volume * 0.04))
         else:
             quantity = 1
 
-        quantity = min(quantity, 8)
+        quantity = min(quantity, 30)
+    else:
+        if confidence >= 82:
+            quantity = max(1, int(item.volume * 0.05))
+        elif confidence >= 68:
+            quantity = max(1, int(item.volume * 0.025))
+        else:
+            quantity = 1
+
+        quantity = min(quantity, 10)
+
+    if price_state == "Deep Undervalued" and sample_count >= 5 and sale_speed in ["Fast", "Medium"]:
+        quantity = int(quantity * 1.5) + 1
+    elif price_state == "Undervalued" and sample_count >= 5:
+        quantity = int(quantity * 1.25) + 1
+    elif price_state == "Below Normal":
+        quantity = max(1, quantity)
+    elif price_state == "Learning":
+        quantity = min(quantity, 2)
+    elif price_state == "Above Normal":
+        quantity = min(quantity, 1)
+
+    if volatility_score >= 45:
+        quantity = max(0, int(quantity * 0.5))
 
     if suggested_buy_below >= 50000:
         quantity = min(quantity, 1)
@@ -234,9 +449,12 @@ def calculate_capital_risk(
     suggested_buy_below: float,
     sale_speed: str,
     confidence: float,
+    market_memory: dict,
 ) -> dict:
     max_gold_exposure = round(suggested_quantity * suggested_buy_below, 2)
     risk = item.risk_level.lower()
+    price_state = market_memory.get("price_state", "Learning")
+    volatility_score = float(market_memory.get("volatility_score") or 0)
 
     if suggested_quantity <= 0:
         return {
@@ -244,7 +462,40 @@ def calculate_capital_risk(
             "capital_risk_label": "Avoid",
             "capital_action": "Do not buy",
             "buy_strategy": "Ignore unless manually verified",
-            "capital_note": "GoldSmith rejected this because confidence, risk, or liquidity is not strong enough.",
+            "capital_note": "GoldSmith rejected this because confidence, risk, memory, or liquidity is not strong enough.",
+        }
+
+    if price_state == "Overpriced":
+        return {
+            "max_gold_exposure": 0,
+            "capital_risk_label": "Avoid",
+            "capital_action": "Do not buy",
+            "buy_strategy": "Overpriced against memory",
+            "capital_note": "Market Memory says the current price is above normal. Wait for a better entry.",
+        }
+
+    if volatility_score >= 65:
+        return {
+            "max_gold_exposure": max_gold_exposure,
+            "capital_risk_label": "High",
+            "capital_action": "Buy one only",
+            "buy_strategy": "Volatility-controlled sniper",
+            "capital_note": "Market Memory shows unstable pricing. Keep exposure tiny.",
+        }
+
+    if (
+        price_state in ["Deep Undervalued", "Undervalued"]
+        and risk == "low"
+        and sale_speed in ["Fast", "Medium"]
+        and confidence >= 75
+        and max_gold_exposure <= 100000
+    ):
+        return {
+            "max_gold_exposure": max_gold_exposure,
+            "capital_risk_label": "Low",
+            "capital_action": "Buy if below target",
+            "buy_strategy": "Memory-backed position",
+            "capital_note": "Market Memory supports the buy. Position size is allowed within exposure limits.",
         }
 
     if risk == "low" and sale_speed == "Fast" and max_gold_exposure <= 25000:
@@ -283,95 +534,139 @@ def calculate_capital_risk(
     }
 
 
-def build_deal_signal(
+def build_decision_fusion(
     item: TrackedItem,
-    price_change_percent: float,
+    signal_data: dict,
     confidence: float,
+    sale_speed: str,
+    liquidity_score: float,
+    suggested_quantity: int,
+    capital_guardrails: dict,
+    market_memory: dict,
 ) -> dict:
-    category = item.goldsmith_category or "Unknown / Other"
+    decision_score = 0.0
+
+    decision_score += min(item.opportunity_score, 100) * 0.25
+    decision_score += min(confidence, 100) * 0.30
+    decision_score += min(liquidity_score, 100) * 0.15
+    decision_score += min(float(market_memory.get("memory_score") or 0), 100) * 0.25
+
     risk = item.risk_level.lower()
+    price_state = market_memory.get("price_state", "Learning")
+    capital_risk = capital_guardrails.get("capital_risk_label", "Medium")
+    volatility_score = float(market_memory.get("volatility_score") or 0)
 
-    if (
-        item.opportunity_score >= 78
-        and confidence >= 75
-        and risk in ["low", "medium"]
-        and item.volume >= 20
-        and item.listing_count >= 5
-    ):
-        return {
-            "signal": "AUTO_WATCH",
-            "label": "Auto Watch",
-            "priority": 1,
-            "tone": "strong",
-            "action": "High-confidence opportunity. Auto-watch candidate.",
-        }
+    if risk == "low":
+        decision_score += 6
+    elif risk == "medium":
+        decision_score += 1
+    elif risk == "high":
+        decision_score -= 18
 
-    if (
-        category in FAST_MOVE_CATEGORIES
-        and item.opportunity_score >= 62
-        and confidence >= 68
-        and item.volume >= 25
-        and risk in ["low", "medium"]
-    ):
-        return {
-            "signal": "FAST_MOVER",
-            "label": "Fast Mover",
-            "priority": 2,
-            "tone": "positive",
-            "action": "Fast-moving category with useful market depth.",
-        }
+    if sale_speed == "Fast":
+        decision_score += 6
+    elif sale_speed == "Medium":
+        decision_score += 2
+    elif sale_speed == "Slow":
+        decision_score -= 6
 
-    if (
-        price_change_percent <= -10
-        and item.opportunity_score >= 55
-        and confidence >= 62
-    ):
-        return {
-            "signal": "PRICE_DROP",
-            "label": "Price Drop",
-            "priority": 3,
-            "tone": "positive",
-            "action": "Price has dropped sharply. Check for a buying window.",
-        }
+    if price_state == "Deep Undervalued":
+        decision_score += 10
+    elif price_state == "Undervalued":
+        decision_score += 6
+    elif price_state == "Below Normal":
+        decision_score += 2
+    elif price_state == "Above Normal":
+        decision_score -= 6
+    elif price_state == "Overpriced":
+        decision_score -= 25
+    elif price_state == "Volatile":
+        decision_score -= 12
+    elif price_state == "Learning":
+        decision_score -= 3
 
-    if (
-        category in SLOW_MARGIN_CATEGORIES
-        and item.current_price >= 1000
-        and item.opportunity_score >= 65
-        and confidence >= 60
-    ):
-        return {
-            "signal": "HIGH_MARGIN",
-            "label": "High Margin",
-            "priority": 4,
-            "tone": "positive",
-            "action": "Slower-moving item with higher margin potential.",
-        }
+    if capital_risk == "Low":
+        decision_score += 5
+    elif capital_risk == "Medium":
+        decision_score += 0
+    elif capital_risk == "High":
+        decision_score -= 10
+    elif capital_risk == "Avoid":
+        decision_score -= 30
 
-    if item.opportunity_score >= 55 and risk in ["low", "medium"]:
-        return {
-            "signal": "WATCH_CANDIDATE",
-            "label": "Watch Candidate",
-            "priority": 5,
-            "tone": "neutral",
-            "action": "Worth watching, but not urgent enough for auto-watch.",
-        }
+    if suggested_quantity <= 0:
+        decision_score -= 25
 
-    if risk == "high":
-        return {
-            "signal": "AVOID",
-            "label": "Avoid",
-            "priority": 7,
-            "tone": "negative",
-            "action": "Risk is high. Do not buy unless you verify demand.",
-        }
+    if volatility_score >= 65:
+        decision_score -= 10
+
+    decision_score = round(max(1, min(decision_score, 100)), 1)
+
+    if suggested_quantity <= 0 or capital_risk == "Avoid" or signal_data["signal"] == "AVOID":
+        final_decision = "Avoid"
+        decision_grade = "D"
+        buy_pressure = "None"
+    elif decision_score >= 88:
+        final_decision = "Strong Buy"
+        decision_grade = "S"
+        buy_pressure = "Very High"
+    elif decision_score >= 78:
+        final_decision = "Buy"
+        decision_grade = "A"
+        buy_pressure = "High"
+    elif decision_score >= 66:
+        final_decision = "Small Buy"
+        decision_grade = "B"
+        buy_pressure = "Medium"
+    elif decision_score >= 54:
+        final_decision = "Watch"
+        decision_grade = "C"
+        buy_pressure = "Low"
+    else:
+        final_decision = "Avoid"
+        decision_grade = "D"
+        buy_pressure = "None"
+
+    if suggested_quantity <= 0:
+        position_size_label = "No position"
+    elif suggested_quantity == 1:
+        position_size_label = "Single item"
+    elif suggested_quantity <= 3:
+        position_size_label = "Small position"
+    elif suggested_quantity <= 10:
+        position_size_label = "Medium position"
+    else:
+        position_size_label = "Large position"
+
+    if final_decision in ["Strong Buy", "Buy"]:
+        decision_note = (
+            f"{final_decision}: {price_state}, {sale_speed.lower()} sale speed, "
+            f"{risk} risk, memory score {market_memory.get('memory_score')}, "
+            f"confidence {confidence}%."
+        )
+    elif final_decision == "Small Buy":
+        decision_note = (
+            f"Small Buy: opportunity is valid, but position is capped due to "
+            f"{capital_risk.lower()} capital risk, sale speed, or memory confidence."
+        )
+    elif final_decision == "Watch":
+        decision_note = (
+            "Watch: not clean enough for a confident buy yet. Wait for better price, "
+            "more history, or stronger volume."
+        )
+    else:
+        decision_note = (
+            f"Avoid: {price_state}, {capital_risk.lower()} capital risk, "
+            f"{risk} item risk, or insufficient confidence."
+        )
 
     return {
-        "signal": "HOLD",
-        "label": "Hold",
-        "priority": 6,
-        "tone": "neutral",
-        "action": "No urgent action yet.",
+        "final_decision": final_decision,
+        "decision_grade": decision_grade,
+        "decision_score": decision_score,
+        "buy_pressure": buy_pressure,
+        "position_size_label": position_size_label,
+        "decision_note": decision_note,
     }
 
 
@@ -383,16 +678,19 @@ def build_deal_reason(
     sale_speed: str,
     suggested_quantity: int,
     max_gold_exposure: float,
+    final_decision: str,
+    decision_score: float,
+    memory_price_state: str,
 ) -> str:
     category = item.goldsmith_category or "Unknown / Other"
 
     return (
-        f"{signal_label}: {category}, score {item.opportunity_score}/100, "
+        f"{final_decision}: {signal_label}, {category}, score {item.opportunity_score}/100, "
         f"{item.risk_level.lower()} risk, {item.volume} quantity across "
         f"{item.listing_count} listings, confidence {confidence}%, "
-        f"sale speed {sale_speed}, suggested quantity {suggested_quantity}, "
-        f"max exposure {round(max_gold_exposure)}g, "
-        f"price movement {price_change_percent}%."
+        f"memory {memory_price_state}, sale speed {sale_speed}, "
+        f"suggested quantity {suggested_quantity}, max exposure {round(max_gold_exposure)}g, "
+        f"decision score {decision_score}, price movement {price_change_percent}%."
     )
 
 
@@ -455,20 +753,39 @@ def serialize_deal_alert(
         previous_value=previous_price,
     )
 
-    confidence = calculate_deal_confidence(
+    market_memory = (
+        market_memory_map.get(item.item_id)
+        if market_memory_map and market_memory_map.get(item.item_id)
+        else empty_market_memory(
+            item_id=item.item_id,
+            current_price=item.current_price,
+        )
+    )
+
+    base_confidence = calculate_deal_confidence(
         item=item,
         price_change_percent=price_change_percent,
+    )
+
+    memory_adjusted_confidence = apply_market_memory_to_confidence(
+        base_confidence=base_confidence,
+        market_memory=market_memory,
     )
 
     signal_data = build_deal_signal(
         item=item,
         price_change_percent=price_change_percent,
-        confidence=confidence,
+        confidence=memory_adjusted_confidence,
+        market_memory=market_memory,
     )
 
-    price_targets = get_price_targets(item)
+    price_targets = get_price_targets(
+        item=item,
+        market_memory=market_memory,
+    )
 
     liquidity_score = calculate_liquidity_score(item)
+
     sale_speed = calculate_sale_speed(
         item=item,
         liquidity_score=liquidity_score,
@@ -477,9 +794,10 @@ def serialize_deal_alert(
     suggested_quantity = calculate_suggested_quantity(
         item=item,
         signal=signal_data["signal"],
-        confidence=confidence,
+        confidence=memory_adjusted_confidence,
         sale_speed=sale_speed,
         suggested_buy_below=price_targets["suggested_buy_below"],
+        market_memory=market_memory,
     )
 
     capital_guardrails = calculate_capital_risk(
@@ -487,16 +805,19 @@ def serialize_deal_alert(
         suggested_quantity=suggested_quantity,
         suggested_buy_below=price_targets["suggested_buy_below"],
         sale_speed=sale_speed,
-        confidence=confidence,
+        confidence=memory_adjusted_confidence,
+        market_memory=market_memory,
     )
 
-    market_memory = (
-        market_memory_map.get(item.item_id)
-        if market_memory_map and market_memory_map.get(item.item_id)
-        else empty_market_memory(
-            item_id=item.item_id,
-            current_price=item.current_price,
-        )
+    decision_fusion = build_decision_fusion(
+        item=item,
+        signal_data=signal_data,
+        confidence=memory_adjusted_confidence,
+        sale_speed=sale_speed,
+        liquidity_score=liquidity_score,
+        suggested_quantity=suggested_quantity,
+        capital_guardrails=capital_guardrails,
+        market_memory=market_memory,
     )
 
     is_watched = (item.realm_id, item.item_id) in watched_keys
@@ -525,7 +846,9 @@ def serialize_deal_alert(
         "signal_priority": signal_data["priority"],
         "signal_tone": signal_data["tone"],
         "signal_action": signal_data["action"],
-        "signal_confidence": confidence,
+        "signal_confidence": memory_adjusted_confidence,
+        "base_signal_confidence": base_confidence,
+        "memory_adjusted_confidence": memory_adjusted_confidence,
         "is_watched": is_watched,
         "liquidity_score": liquidity_score,
         "sale_speed": sale_speed,
@@ -543,23 +866,45 @@ def serialize_deal_alert(
         "memory_average_30_day_price": market_memory["average_30_day_price"],
         **price_targets,
         **capital_guardrails,
+        **decision_fusion,
     } | {
         "signal_reason": build_deal_reason(
             item=item,
             signal_label=signal_data["label"],
-            confidence=confidence,
+            confidence=memory_adjusted_confidence,
             price_change_percent=price_change_percent,
             sale_speed=sale_speed,
             suggested_quantity=suggested_quantity,
             max_gold_exposure=capital_guardrails["max_gold_exposure"],
+            final_decision=decision_fusion["final_decision"],
+            decision_score=decision_fusion["decision_score"],
+            memory_price_state=market_memory["price_state"],
         ),
     }
 
 
 def build_deal_summary(items: list[dict]) -> dict:
     return {
+        "strong_buy_count": len(
+            [item for item in items if item.get("final_decision") == "Strong Buy"]
+        ),
+        "buy_count": len(
+            [item for item in items if item.get("final_decision") == "Buy"]
+        ),
+        "small_buy_count": len(
+            [item for item in items if item.get("final_decision") == "Small Buy"]
+        ),
+        "watch_decision_count": len(
+            [item for item in items if item.get("final_decision") == "Watch"]
+        ),
+        "avoid_decision_count": len(
+            [item for item in items if item.get("final_decision") == "Avoid"]
+        ),
         "auto_watch_count": len(
             [item for item in items if item["signal"] == "AUTO_WATCH"]
+        ),
+        "memory_buy_count": len(
+            [item for item in items if item["signal"] == "MEMORY_BUY"]
         ),
         "fast_mover_count": len(
             [item for item in items if item["signal"] == "FAST_MOVER"]
@@ -603,6 +948,18 @@ def should_auto_watch(alert: dict) -> bool:
 
     if alert.get("capital_risk_label") in ["High", "Avoid"]:
         return False
+
+    if alert.get("final_decision") not in ["Strong Buy", "Buy", "Small Buy"]:
+        return False
+
+    if alert.get("decision_score", 0) < 68:
+        return False
+
+    if alert.get("memory_price_state") in ["Overpriced", "Volatile"]:
+        return False
+
+    if alert["signal"] == "MEMORY_BUY" and alert["signal_confidence"] >= 72:
+        return True
 
     if alert["signal"] == "AUTO_WATCH" and alert["signal_confidence"] >= 72:
         return True
@@ -687,8 +1044,9 @@ async def get_deal_alerts(
 
         alert_items.sort(
             key=lambda item: (
+                item.get("final_decision") == "Avoid",
                 item["signal_priority"],
-                -item["signal_confidence"],
+                -item.get("decision_score", 0),
                 -item.get("memory_score", 0),
                 item["capital_risk_label"] == "Avoid",
                 item["capital_risk_label"] == "High",
@@ -716,6 +1074,7 @@ async def get_deal_alerts(
             "connected_realm_id": connected_realm_id,
             "error": str(error),
             "alert_count": 0,
+            "ignored_count": 0,
             "top_alert": None,
             "summary": build_deal_summary([]),
             "items": [],
@@ -785,8 +1144,11 @@ async def auto_watch_deals(
 
         auto_watch_candidates.sort(
             key=lambda item: (
+                item.get("final_decision") == "Avoid",
                 item["signal_priority"],
+                -item.get("decision_score", 0),
                 -item["signal_confidence"],
+                -item["memory_score"],
                 -item["liquidity_score"],
                 -item["opportunity_score"],
                 -item["volume"],
@@ -851,6 +1213,7 @@ async def auto_watch_deals(
             "status": "Error",
             "connected_realm_id": connected_realm_id,
             "auto_watch_added": 0,
+            "ignored_count": 0,
             "items": [],
             "error": str(error),
         }

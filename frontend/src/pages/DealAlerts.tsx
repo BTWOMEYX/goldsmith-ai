@@ -69,6 +69,14 @@ type DealAlert = {
   memory_price_position_percent: number;
   memory_average_7_day_price: number | null;
   memory_average_30_day_price: number | null;
+  final_decision: string;
+  decision_grade: string;
+  decision_score: number;
+  buy_pressure: string;
+  position_size_label: string;
+  decision_note: string;
+  base_signal_confidence: number;
+  memory_adjusted_confidence: number;
 };
 
 type DealSummary = {
@@ -83,6 +91,12 @@ type DealSummary = {
   medium_capital_risk_count: number;
   high_capital_risk_count: number;
   avoid_capital_count: number;
+  strong_buy_count: number;
+  buy_count: number;
+  small_buy_count: number;
+  watch_decision_count: number;
+  avoid_decision_count: number;
+  memory_buy_count: number;
 };
 
 type DealAlertsResponse = {
@@ -120,11 +134,18 @@ const EMPTY_SUMMARY: DealSummary = {
   medium_capital_risk_count: 0,
   high_capital_risk_count: 0,
   avoid_capital_count: 0,
+  strong_buy_count: 0,
+  buy_count: 0,
+  small_buy_count: 0,
+  watch_decision_count: 0,
+  avoid_decision_count: 0,
+  memory_buy_count: 0,
 };
 
 const SIGNAL_FILTERS = [
   "All Signals",
   "AUTO_WATCH",
+  "MEMORY_BUY",
   "FAST_MOVER",
   "PRICE_DROP",
   "HIGH_MARGIN",
@@ -161,6 +182,15 @@ const MEMORY_FILTERS = [
   "Learning",
 ];
 
+const DECISION_FILTERS = [
+  "All Decisions",
+  "Strong Buy",
+  "Buy",
+  "Small Buy",
+  "Watch",
+  "Avoid",
+];
+
 function formatGold(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "-";
@@ -183,6 +213,8 @@ function getSignalClass(signal: string) {
   switch (signal) {
     case "AUTO_WATCH":
       return "border-emerald-800 bg-emerald-950/40 text-emerald-300";
+    case "MEMORY_BUY":
+      return "border-cyan-800 bg-cyan-950/40 text-cyan-300";
     case "FAST_MOVER":
       return "border-blue-800 bg-blue-950/40 text-blue-300";
     case "PRICE_DROP":
@@ -200,6 +232,8 @@ function getSignalIcon(signal: string) {
   switch (signal) {
     case "AUTO_WATCH":
       return <Zap size={14} />;
+    case "MEMORY_BUY":
+      return <Brain size={14} />;
     case "FAST_MOVER":
       return <CheckCircle2 size={14} />;
     case "PRICE_DROP":
@@ -285,6 +319,41 @@ function getMemoryDealCount(alerts: DealAlert[]) {
   ).length;
 }
 
+
+function getDecisionClass(finalDecision: string) {
+  switch (finalDecision) {
+    case "Strong Buy":
+      return "border-emerald-700 bg-emerald-950/50 text-emerald-300";
+    case "Buy":
+      return "border-emerald-800 bg-emerald-950/40 text-emerald-300";
+    case "Small Buy":
+      return "border-blue-800 bg-blue-950/40 text-blue-300";
+    case "Watch":
+      return "border-amber-800 bg-amber-950/40 text-amber-300";
+    case "Avoid":
+      return "border-red-800 bg-red-950/40 text-red-300";
+    default:
+      return "border-slate-700 bg-slate-950 text-slate-300";
+  }
+}
+
+function getGradeClass(grade: string) {
+  switch (grade) {
+    case "S":
+      return "text-emerald-300";
+    case "A":
+      return "text-emerald-400";
+    case "B":
+      return "text-blue-400";
+    case "C":
+      return "text-amber-400";
+    case "D":
+      return "text-red-400";
+    default:
+      return "text-slate-400";
+  }
+}
+
 export default function DealAlerts() {
   const [realm, setRealm] = useState(11);
   const [alerts, setAlerts] = useState<DealAlert[]>([]);
@@ -308,6 +377,7 @@ export default function DealAlerts() {
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
   const [capitalFilter, setCapitalFilter] = useState("All Capital");
   const [memoryFilter, setMemoryFilter] = useState("All Memory");
+  const [decisionFilter, setDecisionFilter] = useState("All Decisions");
 
   async function loadAlerts(realmId: number) {
     try {
@@ -526,15 +596,20 @@ export default function DealAlerts() {
         memoryFilter === "All Memory" ||
         alert.memory_price_state === memoryFilter;
 
+      const matchesDecision =
+        decisionFilter === "All Decisions" ||
+        alert.final_decision === decisionFilter;
+
       return (
         matchesSearch &&
         matchesSignal &&
         matchesCategory &&
         matchesCapital &&
-        matchesMemory
+        matchesMemory &&
+        matchesDecision
       );
     });
-  }, [alerts, capitalFilter, categoryFilter, memoryFilter, searchTerm, signalFilter]);
+  }, [alerts, capitalFilter, categoryFilter, decisionFilter, memoryFilter, searchTerm, signalFilter]);
 
   return (
     <div className="space-y-6">
@@ -587,11 +662,18 @@ export default function DealAlerts() {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-7">
+      <div className="grid gap-4 md:grid-cols-8">
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-          <p className="text-xs text-slate-500">Auto Watch</p>
+          <p className="text-xs text-slate-500">Strong Buy</p>
+          <p className="mt-2 text-2xl font-bold text-emerald-300">
+            {summary.strong_buy_count}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+          <p className="text-xs text-slate-500">Buy</p>
           <p className="mt-2 text-2xl font-bold text-emerald-400">
-            {summary.auto_watch_count}
+            {summary.buy_count}
           </p>
         </div>
 
@@ -671,6 +753,15 @@ export default function DealAlerts() {
                     <Brain size={14} />
                     {topAlert.memory_price_state}
                   </div>
+
+                  <div
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getDecisionClass(
+                      topAlert.final_decision,
+                    )}`}
+                  >
+                    Grade <span className={getGradeClass(topAlert.decision_grade)}>{topAlert.decision_grade}</span>
+                    {topAlert.final_decision}
+                  </div>
                 </div>
 
                 <h3 className="text-2xl font-bold text-white">
@@ -683,6 +774,10 @@ export default function DealAlerts() {
 
                 <p className="mt-2 text-sm text-blue-300">
                   {topAlert.memory_note}
+                </p>
+
+                <p className="mt-2 text-sm text-emerald-300">
+                  {topAlert.decision_note}
                 </p>
 
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -709,7 +804,7 @@ export default function DealAlerts() {
               </div>
             </div>
 
-            <div className="grid gap-3 text-right sm:grid-cols-3">
+            <div className="grid gap-3 text-right sm:grid-cols-4">
               <div>
                 <p className="text-xs text-slate-500">Buy Qty</p>
                 <p className="text-2xl font-bold text-white">
@@ -730,13 +825,20 @@ export default function DealAlerts() {
                   {topAlert.signal_confidence.toFixed(1)}%
                 </p>
               </div>
+
+              <div>
+                <p className="text-xs text-slate-500">Decision Score</p>
+                <p className="text-2xl font-bold text-blue-400">
+                  {topAlert.decision_score.toFixed(1)}
+                </p>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-        <div className="grid gap-3 lg:grid-cols-5">
+        <div className="grid gap-3 lg:grid-cols-6">
           <div className="relative">
             <Search
               size={16}
@@ -798,16 +900,29 @@ export default function DealAlerts() {
               </option>
             ))}
           </select>
+
+          <select
+            value={decisionFilter}
+            onChange={(event) => setDecisionFilter(event.target.value)}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-amber-500"
+          >
+            {DECISION_FILTERS.map((decision) => (
+              <option key={decision} value={decision}>
+                {decision}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
         <div className="overflow-x-auto">
-          <table className="min-w-[1760px] w-full text-left text-sm">
+          <table className="min-w-[1920px] w-full text-left text-sm">
             <thead className="border-b border-slate-800 bg-slate-950 text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">Item</th>
                 <th className="px-4 py-3">Signal</th>
+                <th className="px-4 py-3">Decision</th>
                 <th className="px-4 py-3">Capital</th>
                 <th className="px-4 py-3">Memory</th>
                 <th className="px-4 py-3">Buy Plan</th>
@@ -826,7 +941,7 @@ export default function DealAlerts() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={13}
+                    colSpan={14}
                     className="px-4 py-10 text-center text-slate-500"
                   >
                     Loading deal alerts...
@@ -835,7 +950,7 @@ export default function DealAlerts() {
               ) : filteredAlerts.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={13}
+                    colSpan={14}
                     className="px-4 py-10 text-center text-slate-500"
                   >
                     No alerts match your filters. Run Global Sync or loosen filters.
@@ -880,6 +995,27 @@ export default function DealAlerts() {
                         {getSignalIcon(alert.signal)}
                         {alert.signal_label}
                       </span>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-semibold ${getDecisionClass(
+                          alert.final_decision,
+                        )}`}
+                      >
+                        <span className={getGradeClass(alert.decision_grade)}>
+                          {alert.decision_grade}
+                        </span>
+                        {alert.final_decision}
+                      </span>
+
+                      <p className="mt-1 text-xs text-slate-500">
+                        Score {alert.decision_score.toFixed(1)} - {alert.buy_pressure}
+                      </p>
+
+                      <p className="mt-1 text-xs text-slate-500">
+                        {alert.position_size_label}
+                      </p>
                     </td>
 
                     <td className="px-4 py-4">

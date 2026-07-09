@@ -66,6 +66,14 @@ type DealAlert = {
   memory_price_position_percent: number;
   memory_average_7_day_price: number | null;
   memory_average_30_day_price: number | null;
+  final_decision: string;
+  decision_grade: string;
+  decision_score: number;
+  buy_pressure: string;
+  position_size_label: string;
+  decision_note: string;
+  base_signal_confidence: number;
+  memory_adjusted_confidence: number;
 };
 
 type WatchlistPriorityItem = {
@@ -115,6 +123,11 @@ type ActionCenterResponse = {
     suppressed_count?: number;
     memory_undervalued_count?: number;
     memory_volatile_count?: number;
+    strong_buy_count?: number;
+    buy_count?: number;
+    small_buy_count?: number;
+    watch_decision_count?: number;
+    avoid_decision_count?: number;
     capture: {
       latest_capture_at: string | null;
       item_count: number;
@@ -239,6 +252,41 @@ function getMemoryClass(priceState: string) {
       return "border-slate-700 bg-slate-950 text-slate-400";
     default:
       return "border-slate-700 bg-slate-950 text-slate-300";
+  }
+}
+
+
+function getDecisionClass(finalDecision: string) {
+  switch (finalDecision) {
+    case "Strong Buy":
+      return "border-emerald-700 bg-emerald-950/50 text-emerald-300";
+    case "Buy":
+      return "border-emerald-800 bg-emerald-950/40 text-emerald-300";
+    case "Small Buy":
+      return "border-blue-800 bg-blue-950/40 text-blue-300";
+    case "Watch":
+      return "border-amber-800 bg-amber-950/40 text-amber-300";
+    case "Avoid":
+      return "border-red-800 bg-red-950/40 text-red-300";
+    default:
+      return "border-slate-700 bg-slate-950 text-slate-300";
+  }
+}
+
+function getGradeClass(grade: string) {
+  switch (grade) {
+    case "S":
+      return "text-emerald-300";
+    case "A":
+      return "text-emerald-400";
+    case "B":
+      return "text-blue-400";
+    case "C":
+      return "text-amber-400";
+    case "D":
+      return "text-red-400";
+    default:
+      return "text-slate-400";
   }
 }
 
@@ -461,6 +509,15 @@ export default function Dashboard() {
                     <Brain size={14} />
                     {topAlert.memory_price_state}
                   </div>
+
+                  <div
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getDecisionClass(
+                      topAlert.final_decision,
+                    )}`}
+                  >
+                    Grade <span className={getGradeClass(topAlert.decision_grade)}>{topAlert.decision_grade}</span>
+                    {topAlert.final_decision}
+                  </div>
                 </div>
 
                 <h3 className="text-xl font-bold text-white">
@@ -473,6 +530,10 @@ export default function Dashboard() {
 
                 <p className="mt-2 text-sm text-blue-300">
                   {topAlert.memory_note}
+                </p>
+
+                <p className="mt-2 text-sm text-emerald-300">
+                  {topAlert.decision_note}
                 </p>
               </div>
             </div>
