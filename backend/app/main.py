@@ -12,6 +12,7 @@ from app.api.deals import router as deals_router
 from app.api.health import router as health_router
 from app.api.ignore_rules import router as ignore_rules_router
 from app.api.market_memory import router as market_memory_router
+from app.api.performance_feedback import router as performance_feedback_router
 from app.api.history import router as history_router
 from app.api.realms import router as realms_router
 from app.api.signals import router as signals_router
@@ -64,6 +65,7 @@ app.include_router(watchlist_router)
 app.include_router(history_router)
 app.include_router(ignore_rules_router)
 app.include_router(market_memory_router)
+app.include_router(performance_feedback_router)
 app.include_router(signals_router)
 app.include_router(realms_router)
 app.include_router(capture_router)

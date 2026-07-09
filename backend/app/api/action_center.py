@@ -12,6 +12,7 @@ from app.api.deals import (
 )
 from app.services.ignore_rules import filter_ignored_tracked_items, get_active_ignore_rules
 from app.services.market_memory import build_market_memory_map
+from app.services.performance_feedback import build_feedback_adjustment_map
 from app.utils.realms import get_realm_display_name
 from database import get_db
 from models import MarketSnapshot, TrackedItem, WatchlistItem
@@ -264,12 +265,18 @@ async def get_action_center(
             days=30,
         )
 
+        feedback_map = await build_feedback_adjustment_map(
+            db=db,
+            connected_realm_id=connected_realm_id,
+        )
+
         alert_items = [
             serialize_deal_alert(
                 item=item,
                 watched_keys=watched_keys,
                 snapshot_map=snapshot_map,
                 market_memory_map=memory_map,
+                performance_feedback_map=feedback_map,
             )
             for item in tracked_items
         ]

@@ -1,4 +1,9 @@
-@import "tailwindcss";
+from pathlib import Path
+
+path = Path(r"F:\Projects\goldsmith-ai\frontend\src\index.css")
+text = path.read_text()
+
+addition = r'''
 
 /* GoldSmith global UI polish */
 :root {
@@ -42,3 +47,10 @@ html[data-goldsmith-mode="simple"] .pro-only {
 .goldsmith-action-glow {
   box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35), 0 20px 60px rgba(245, 158, 11, 0.08);
 }
+'''
+
+if "GoldSmith global UI polish" not in text:
+    text += addition
+
+path.write_text(text)
+print("index.css patched with GoldSmith global UI polish.")

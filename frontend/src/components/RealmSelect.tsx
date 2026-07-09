@@ -1,310 +1,195 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 
+import {
+  getGlobalRealmId,
+  listenForGlobalRealmChange,
+  setGlobalRealmId,
+} from "../utils/globalRealm";
+
 type RealmOption = {
   connected_realm_id: number;
-  label: string;
+  realm_id?: number;
   name: string;
-  realm_count: number;
-  realm_names: string[];
-  population: string;
-  status: string;
-  region: string;
+  slug?: string;
+  region?: string;
 };
 
-type ExpandedRealmOption = {
-  option_id: string;
-  connected_realm_id: number;
-  realm_name: string;
-  connected_realm_label: string;
-  realm_count: number;
-  population: string;
-  status: string;
-  region: string;
-  linked_realms: string[];
+type RealmApiRealm = {
+  id?: number;
+  realm_id?: number;
+  name?: string;
+  slug?: string;
 };
 
-type RealmsResponse = {
-  status: string;
-  region: string;
-  connected_realm_count: number;
-  items: RealmOption[];
+type RealmApiItem = {
+  connected_realm_id?: number;
+  id?: number;
+  name?: string;
+  slug?: string;
+  region?: string;
+  realms?: RealmApiRealm[];
 };
 
 type RealmSelectProps = {
-  value: number;
-  onChange: (connectedRealmId: number) => void;
+  value?: number;
+  onChange?: (connectedRealmId: number) => void;
+  className?: string;
+  master?: boolean;
 };
 
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
-const DEFAULT_REALM_STORAGE_KEY = "goldsmith.defaultRealm";
-
 const FALLBACK_REALMS: RealmOption[] = [
   {
     connected_realm_id: 11,
-    label: "Illidan",
     name: "Illidan",
-    realm_count: 1,
-    realm_names: ["Illidan"],
-    population: "Unknown",
-    status: "Unknown",
-    region: "US",
   },
 ];
 
-function getRealmNames(realm: RealmOption) {
-  if (realm.realm_names && realm.realm_names.length > 0) {
-    return realm.realm_names;
-  }
+function buildRealmOptions(items: RealmApiItem[]): RealmOption[] {
+  const options: RealmOption[] = [];
 
-  if (realm.name) {
-    return [realm.name];
-  }
+  for (const item of items) {
+    const connectedRealmId = Number(item.connected_realm_id ?? item.id);
 
-  return [realm.label];
-}
-
-function getStatusDot(status: string) {
-  const normalisedStatus = status.trim().toLowerCase();
-
-  if (normalisedStatus === "up") {
-    return "🟢";
-  }
-
-  if (normalisedStatus === "down" || normalisedStatus === "offline") {
-    return "🔴";
-  }
-
-  return "🟡";
-}
-
-function getDropdownLabel(option: ExpandedRealmOption) {
-  const statusDot = getStatusDot(option.status);
-
-  return `${statusDot} ${option.realm_name} · ${option.population}`;
-}
-
-function getFullRealmTitle(option: ExpandedRealmOption) {
-  if (option.realm_count <= 1) {
-    return `${option.region} Connected Realm ${option.connected_realm_id}: ${option.realm_name}`;
-  }
-
-  return `${option.region} Connected Realm ${
-    option.connected_realm_id
-  }: ${option.realm_name} shares auction house with ${option.linked_realms.join(
-    ", "
-  )}`;
-}
-
-function expandRealms(realms: RealmOption[]) {
-  const expandedOptions: ExpandedRealmOption[] = [];
-
-  realms.forEach((realm) => {
-    const realmNames = getRealmNames(realm).sort((a, b) =>
-      a.localeCompare(b)
-    );
-
-    realmNames.forEach((realmName) => {
-      const linkedRealms = realmNames.filter(
-        (linkedRealmName) => linkedRealmName !== realmName
-      );
-
-      expandedOptions.push({
-        option_id: `${realm.connected_realm_id}-${realmName}`,
-        connected_realm_id: realm.connected_realm_id,
-        realm_name: realmName,
-        connected_realm_label: realm.label,
-        realm_count: realmNames.length,
-        population: realm.population,
-        status: realm.status,
-        region: realm.region,
-        linked_realms: linkedRealms,
-      });
-    });
-  });
-
-  return expandedOptions.sort((a, b) =>
-    a.realm_name.localeCompare(b.realm_name)
-  );
-}
-
-function readStoredRealmSelection() {
-  try {
-    const storedValue = localStorage.getItem(DEFAULT_REALM_STORAGE_KEY);
-
-    if (!storedValue) {
-      return null;
+    if (!Number.isFinite(connectedRealmId) || connectedRealmId <= 0) {
+      continue;
     }
 
-    return JSON.parse(storedValue) as {
-      option_id: string;
-      connected_realm_id: number;
-      realm_name: string;
-    };
-  } catch {
-    return null;
+    if (Array.isArray(item.realms) && item.realms.length > 0) {
+      for (const realm of item.realms) {
+        options.push({
+          connected_realm_id: connectedRealmId,
+          realm_id: Number(realm.realm_id ?? realm.id),
+          name: realm.name ?? item.name ?? `Realm ${connectedRealmId}`,
+          slug: realm.slug ?? item.slug,
+          region: item.region,
+        });
+      }
+    } else {
+      options.push({
+        connected_realm_id: connectedRealmId,
+        name: item.name ?? `Connected Realm ${connectedRealmId}`,
+        slug: item.slug,
+        region: item.region,
+      });
+    }
   }
-}
 
-function saveStoredRealmSelection(option: ExpandedRealmOption) {
-  localStorage.setItem(
-    DEFAULT_REALM_STORAGE_KEY,
-    JSON.stringify({
-      option_id: option.option_id,
-      connected_realm_id: option.connected_realm_id,
-      realm_name: option.realm_name,
-    })
+  const deduped = new Map<string, RealmOption>();
+
+  for (const option of options) {
+    const key = `${option.connected_realm_id}-${option.name}`;
+
+    if (!deduped.has(key)) {
+      deduped.set(key, option);
+    }
+  }
+
+  return [...deduped.values()].sort((a, b) =>
+    a.name.localeCompare(b.name),
   );
 }
 
-export default function RealmSelect({ value, onChange }: RealmSelectProps) {
-  const [realms, setRealms] = useState<RealmOption[]>(FALLBACK_REALMS);
+export default function RealmSelect({
+  value,
+  onChange,
+  className = "",
+  master = false,
+}: RealmSelectProps) {
+  const [options, setOptions] = useState<RealmOption[]>(FALLBACK_REALMS);
+  const [selectedRealm, setSelectedRealm] = useState(() =>
+    getGlobalRealmId(value ?? 11),
+  );
   const [loading, setLoading] = useState(false);
-  const [realmsLoaded, setRealmsLoaded] = useState(false);
-  const [selectedOptionId, setSelectedOptionId] = useState("");
-  const [storedDefaultApplied, setStoredDefaultApplied] = useState(false);
+
+  const currentRealmName = useMemo(() => {
+    return (
+      options.find(
+        (option) => option.connected_realm_id === selectedRealm,
+      )?.name ?? `Realm ${selectedRealm}`
+    );
+  }, [options, selectedRealm]);
+
+  function applyRealm(realmId: number, syncGlobal: boolean) {
+    setSelectedRealm(realmId);
+
+    if (syncGlobal) {
+      setGlobalRealmId(realmId);
+    }
+
+    onChange?.(realmId);
+  }
+
+  async function loadRealms() {
+    try {
+      setLoading(true);
+
+      const response = await axios.get(`${API_BASE_URL}/realms`);
+      const rawItems = Array.isArray(response.data)
+        ? response.data
+        : response.data?.items ?? response.data?.realms ?? [];
+
+      const nextOptions = buildRealmOptions(rawItems);
+
+      if (nextOptions.length > 0) {
+        setOptions(nextOptions);
+      }
+    } catch {
+      setOptions((current) => (current.length > 0 ? current : FALLBACK_REALMS));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    async function loadRealms() {
-      try {
-        setLoading(true);
-
-        const response = await axios.get<RealmsResponse>(
-          `${API_BASE_URL}/realms`
-        );
-
-        if (
-          response.data.status === "Success" &&
-          response.data.items.length > 0
-        ) {
-          setRealms(response.data.items);
-        }
-      } catch {
-        setRealms(FALLBACK_REALMS);
-      } finally {
-        setLoading(false);
-        setRealmsLoaded(true);
-      }
-    }
-
     loadRealms();
   }, []);
 
-  const expandedRealmOptions = useMemo(() => {
-    return expandRealms(realms);
-  }, [realms]);
+  useEffect(() => {
+    const globalRealm = getGlobalRealmId(value ?? 11);
+
+    setSelectedRealm(globalRealm);
+    onChange?.(globalRealm);
+  }, []);
 
   useEffect(() => {
-    if (!realmsLoaded || expandedRealmOptions.length === 0) {
-      return;
+    return listenForGlobalRealmChange((realmId) => {
+      setSelectedRealm(realmId);
+      onChange?.(realmId);
+    });
+  }, [onChange]);
+
+  useEffect(() => {
+    if (value && value !== selectedRealm) {
+      setSelectedRealm(value);
     }
+  }, [value, selectedRealm]);
 
-    if (!storedDefaultApplied) {
-      const storedSelection = readStoredRealmSelection();
-
-      if (storedSelection) {
-        const storedOption =
-          expandedRealmOptions.find(
-            (option) => option.option_id === storedSelection.option_id
-          ) ??
-          expandedRealmOptions.find(
-            (option) =>
-              option.connected_realm_id ===
-                storedSelection.connected_realm_id &&
-              option.realm_name === storedSelection.realm_name
-          ) ??
-          expandedRealmOptions.find(
-            (option) =>
-              option.connected_realm_id === storedSelection.connected_realm_id
-          );
-
-        if (storedOption) {
-          setSelectedOptionId(storedOption.option_id);
-
-          if (storedOption.connected_realm_id !== value) {
-            onChange(storedOption.connected_realm_id);
-          }
-
-          setStoredDefaultApplied(true);
-          return;
-        }
-      }
-
-      setStoredDefaultApplied(true);
-    }
-
-    const currentSelectedOption = expandedRealmOptions.find(
-      (option) => option.option_id === selectedOptionId
-    );
-
-    if (
-      currentSelectedOption &&
-      currentSelectedOption.connected_realm_id === value
-    ) {
-      return;
-    }
-
-    const firstMatchingOption = expandedRealmOptions.find(
-      (option) => option.connected_realm_id === value
-    );
-
-    if (firstMatchingOption) {
-      setSelectedOptionId(firstMatchingOption.option_id);
-      return;
-    }
-
-    setSelectedOptionId(expandedRealmOptions[0].option_id);
-  }, [
-    expandedRealmOptions,
-    onChange,
-    realmsLoaded,
-    selectedOptionId,
-    storedDefaultApplied,
-    value,
-  ]);
-
-  const selectedRealmTitle = useMemo(() => {
-    const selectedRealm = expandedRealmOptions.find(
-      (option) => option.option_id === selectedOptionId
-    );
-
-    if (!selectedRealm) {
-      return loading ? "Loading realms..." : "Select connected realm";
-    }
-
-    return getFullRealmTitle(selectedRealm);
-  }, [expandedRealmOptions, selectedOptionId, loading]);
-
-  function handleRealmChange(optionId: string) {
-    setSelectedOptionId(optionId);
-
-    const selectedRealm = expandedRealmOptions.find(
-      (option) => option.option_id === optionId
-    );
-
-    if (selectedRealm) {
-      saveStoredRealmSelection(selectedRealm);
-      onChange(selectedRealm.connected_realm_id);
-    }
+  if (!master) {
+    return null;
   }
 
   return (
-    <select
-      value={selectedOptionId}
-      onChange={(event) => handleRealmChange(event.target.value)}
-      className="max-w-sm rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 outline-none transition hover:border-slate-600 focus:border-amber-500"
-      title={selectedRealmTitle}
-    >
-      {expandedRealmOptions.map((realm) => (
-        <option
-          key={realm.option_id}
-          value={realm.option_id}
-          title={getFullRealmTitle(realm)}
-        >
-          {getDropdownLabel(realm)}
-        </option>
-      ))}
-    </select>
+    <div className={`relative ${className}`}>
+      <select
+        value={selectedRealm}
+        onChange={(event) => applyRealm(Number(event.target.value), true)}
+        disabled={loading}
+        title={`Global realm: ${currentRealmName}`}
+        className="min-w-[210px] rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-semibold text-white outline-none transition focus:border-amber-500 disabled:opacity-60"
+      >
+        {options.map((option) => (
+          <option
+            key={`${option.connected_realm_id}-${option.name}`}
+            value={option.connected_realm_id}
+          >
+            {option.name}
+            {option.region ? ` - ${option.region}` : ""}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }

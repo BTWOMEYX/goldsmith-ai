@@ -1,678 +1,531 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+import RealmSelect from "./RealmSelect";
+
 import {
   Activity,
+  AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Clock3,
   Database,
   RefreshCw,
-  Server,
   Zap,
 } from "lucide-react";
 
-type ScanMode = "quick" | "full";
-
-type StoredRealmSelection = {
-  option_id?: string;
-  connected_realm_id?: number;
-  realm_name?: string;
-};
-
-type SyncStats = {
-  auctions_downloaded?: number;
-  items_scanned?: number;
-  market_snapshots_saved?: number;
-  opportunities_unlocked?: number;
-  snapshots_saved?: number;
-  candidates_found?: number;
-  metadata_enriched?: number;
-  passed_profitability_buffers?: number;
-  ignored_count?: number;
-  auto_watch_added?: number;
-};
-
-type SyncResponse = {
-  status: string;
-  scan_mode?: string;
-  connected_realm_id?: number;
-  realm?: string;
-  auctions_downloaded?: number;
-  items_scanned?: number;
-  market_snapshots_saved?: number;
-  opportunities_unlocked?: number;
-  snapshots_saved?: number;
-  passed_profitability_buffers?: number;
-  candidates_found?: number;
-  metadata_enriched?: number;
-  error?: string;
-  message?: string;
-};
-
-type AutoWatchResponse = {
-  status: string;
-  connected_realm_id?: number;
-  realm?: string;
-  auto_watch_added: number;
-  ignored_count?: number;
-  error?: string;
-};
-
-type SyncJob = {
-  job_id: string;
-  status: "queued" | "running" | "complete" | "failed";
-  scan_mode: ScanMode;
-  connected_realm_id: number;
-  realm_name: string;
-  phase: string;
-  progress_percent: number;
-  message: string;
-  stats: SyncStats;
-  error: string | null;
-  sync_response: SyncResponse | null;
-  auto_watch_response: AutoWatchResponse | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  updated_at: string;
-};
-
-type SyncJobResponse = {
-  status: string;
-  message?: string;
-  error?: string;
-  job: SyncJob | null;
-};
-
-type LastSyncPayload = {
-  completed_at: string;
-  scan_mode: ScanMode;
-  connected_realm_id: number;
-  realm_name: string;
-  response: SyncResponse;
-  auto_watch: AutoWatchResponse | null;
-};
-
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
-const DEFAULT_REALM_STORAGE_KEY = "goldsmith.defaultRealm";
-const LAST_SYNC_STORAGE_KEY = "goldsmith.lastSync";
+type UiMode = "simple" | "pro";
+type ScanMode = "quick" | "full";
 
-function readStoredRealmSelection(): Required<StoredRealmSelection> {
-  try {
-    const storedValue = localStorage.getItem(DEFAULT_REALM_STORAGE_KEY);
+type SyncJob = {
+  job_id?: string;
+  scan_mode?: string;
+  status?: string;
+  phase?: string;
+  phase_label?: string;
+  progress?: number;
+  progress_percent?: number;
+  message?: string;
+  error?: string | null;
+  stats?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+};
 
-    if (!storedValue) {
-      return {
-        option_id: "11-Illidan",
-        connected_realm_id: 11,
-        realm_name: "Illidan",
-      };
-    }
+const UI_MODE_KEY = "goldsmith.uiMode";
+const REALM_KEY = "goldsmith.defaultRealm";
+const GOLDSMITH_REALM_CHANGED_EVENT = "goldsmith-realm-changed";
+const LAST_SYNC_KEY = "goldsmith.lastSync";
+const EXPANDED_KEY = "goldsmith.globalSyncExpanded";
 
-    const parsedValue = JSON.parse(storedValue) as StoredRealmSelection;
+function readUiMode(): UiMode {
+  const stored = localStorage.getItem(UI_MODE_KEY);
 
-    return {
-      option_id: parsedValue.option_id ?? "11-Illidan",
-      connected_realm_id: parsedValue.connected_realm_id ?? 11,
-      realm_name: parsedValue.realm_name ?? "Illidan",
-    };
-  } catch {
-    return {
-      option_id: "11-Illidan",
-      connected_realm_id: 11,
-      realm_name: "Illidan",
-    };
+  if (stored === "simple" || stored === "pro") {
+    return stored;
   }
+
+  return "simple";
 }
 
-function readLastSyncPayload() {
-  try {
-    const storedValue = localStorage.getItem(LAST_SYNC_STORAGE_KEY);
+function readRealmId() {
+  const stored = Number(localStorage.getItem(REALM_KEY));
 
-    if (!storedValue) {
-      return null;
-    }
-
-    return JSON.parse(storedValue) as LastSyncPayload;
-  } catch {
-    return null;
+  if (Number.isFinite(stored) && stored > 0) {
+    return stored;
   }
+
+  return 11;
 }
 
-function formatNumber(value: number | undefined) {
-  if (value === undefined || Number.isNaN(value)) {
-    return "-";
+function readExpanded() {
+  const stored = localStorage.getItem(EXPANDED_KEY);
+
+  if (stored === "true") {
+    return true;
   }
 
+  if (stored === "false") {
+    return false;
+  }
+
+  return readUiMode() === "pro";
+}
+
+function getJobFromResponse(data: any): SyncJob | null {
+  return data?.job ?? data?.active_job ?? data?.sync_job ?? null;
+}
+
+function getJobStatus(job: SyncJob | null) {
+  return String(job?.status ?? "").toLowerCase();
+}
+
+function getProgress(job: SyncJob | null) {
+  const raw = Number(job?.progress_percent ?? job?.progress ?? 0);
+
+  if (!Number.isFinite(raw)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(raw, 100));
+}
+
+function getJobStats(job: SyncJob | null) {
+  return {
+    ...(job?.result ?? {}),
+    ...(job?.stats ?? {}),
+  } as Record<string, unknown>;
+}
+
+function getStat(job: SyncJob | null, key: string) {
+  const stats = getJobStats(job);
+  const value = Number(stats[key] ?? 0);
+
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return value;
+}
+
+function formatNumber(value: number) {
   return value.toLocaleString();
 }
 
-function formatDateTime(value: string | null) {
-  if (!value) {
-    return "No scan yet";
+function isJobRunning(job: SyncJob | null) {
+  if (!job) {
+    return false;
   }
 
-  try {
-    return new Intl.DateTimeFormat("en-AU", {
-      day: "2-digit",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return "Unknown";
-  }
-}
+  const status = getJobStatus(job);
 
-function getAxiosErrorMessage(error: unknown) {
-  if (axios.isAxiosError(error)) {
-    const responseData = error.response?.data as
-      | { error?: string; message?: string; detail?: string }
-      | undefined;
-
-    if (responseData?.error) {
-      return responseData.error;
-    }
-
-    if (responseData?.message) {
-      return responseData.message;
-    }
-
-    if (responseData?.detail) {
-      return responseData.detail;
-    }
-
-    if (error.message) {
-      return error.message;
-    }
-  }
-
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Unknown error.";
-}
-
-function getPhaseLabel(phase: string) {
-  switch (phase) {
-    case "queued":
-      return "Queued";
-    case "starting":
-      return "Starting scan";
-    case "downloading_auctions":
-      return "Downloading auctions";
-    case "running_market_engine":
-      return "Capturing and scoring market";
-    case "applying_filters":
-      return "Applying filters and guardrails";
-    case "running_auto_watch":
-      return "Running Auto Watch";
-    case "complete":
-      return "Sync complete";
-    case "failed":
-      return "Sync failed";
-    default:
-      return "Ready";
-  }
-}
-
-function buildFallbackSyncResponse(job: SyncJob): SyncResponse {
-  return {
-    status: job.status === "complete" ? "Success" : "Error",
-    scan_mode: job.scan_mode,
-    connected_realm_id: job.connected_realm_id,
-    realm: job.realm_name,
-    auctions_downloaded: job.stats.auctions_downloaded ?? 0,
-    items_scanned: job.stats.items_scanned ?? 0,
-    market_snapshots_saved: job.stats.market_snapshots_saved ?? 0,
-    opportunities_unlocked: job.stats.opportunities_unlocked ?? 0,
-    snapshots_saved: job.stats.snapshots_saved ?? 0,
-    passed_profitability_buffers: job.stats.passed_profitability_buffers ?? 0,
-    candidates_found: job.stats.candidates_found ?? 0,
-    metadata_enriched: job.stats.metadata_enriched ?? 0,
-    error: job.error ?? undefined,
-  };
-}
-
-function saveJobResult(job: SyncJob) {
-  const syncPayload: LastSyncPayload = {
-    completed_at: job.completed_at ?? new Date().toISOString(),
-    scan_mode: job.scan_mode,
-    connected_realm_id: job.connected_realm_id,
-    realm_name: job.realm_name,
-    response: job.sync_response ?? buildFallbackSyncResponse(job),
-    auto_watch: job.auto_watch_response,
-  };
-
-  localStorage.setItem(LAST_SYNC_STORAGE_KEY, JSON.stringify(syncPayload));
-
-  window.dispatchEvent(
-    new CustomEvent("goldsmith-sync-complete", {
-      detail: syncPayload,
-    }),
+  return !["complete", "completed", "failed", "error", "cancelled"].includes(
+    status,
   );
-
-  return syncPayload;
 }
 
-function getProfitPilotMessage(lastSync: LastSyncPayload | null) {
-  if (!lastSync) {
-    return "Run Quick Scan or Full Scan to capture the market.";
-  }
-
-  const response = lastSync.response;
-
-  if (response.status !== "Success") {
-    return response.error ?? response.message ?? "Last scan failed.";
-  }
-
-  const autoWatched = lastSync.auto_watch?.auto_watch_added ?? 0;
-  const opportunities = response.opportunities_unlocked ?? 0;
-  const marketCaptures = response.market_snapshots_saved ?? 0;
-  const passedBuffers = response.passed_profitability_buffers ?? 0;
-
-  if (autoWatched > 0) {
-    return `${autoWatched} high-confidence deal${
-      autoWatched === 1 ? "" : "s"
-    } auto-watched.`;
-  }
-
-  if (opportunities > 0) {
-    return `${opportunities} opportunities found. Review Action Center.`;
-  }
-
-  if (marketCaptures > 0 && passedBuffers === 0) {
-    return "Market captured, but filters rejected junk.";
-  }
-
-  return "No clean opportunities yet. Try Full Scan or another realm.";
-}
-
-export default function GlobalSyncBar() {
-  const handledJobIds = useRef<Set<string>>(new Set());
-
-  const [realmSelection, setRealmSelection] = useState(
-    readStoredRealmSelection(),
-  );
-  const [lastSync, setLastSync] = useState<LastSyncPayload | null>(
-    readLastSyncPayload(),
-  );
-  const [activeJob, setActiveJob] = useState<SyncJob | null>(null);
-  const [message, setMessage] = useState("");
-
-  useEffect(() => {
-    function refreshStoredState() {
-      setRealmSelection(readStoredRealmSelection());
-      setLastSync(readLastSyncPayload());
-    }
-
-    function handleStorageChange(event: StorageEvent) {
-      if (
-        event.key === DEFAULT_REALM_STORAGE_KEY ||
-        event.key === LAST_SYNC_STORAGE_KEY
-      ) {
-        refreshStoredState();
-      }
-    }
-
-    window.addEventListener("storage", handleStorageChange);
-    window.addEventListener("goldsmith-sync-complete", refreshStoredState);
-
-    const interval = window.setInterval(refreshStoredState, 1000);
-
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      window.removeEventListener("goldsmith-sync-complete", refreshStoredState);
-      window.clearInterval(interval);
-    };
-  }, []);
-
-  useEffect(() => {
-    async function loadActiveJob() {
-      try {
-        const currentRealm = readStoredRealmSelection();
-
-        const response = await axios.get<SyncJobResponse>(
-          `${API_BASE_URL}/sync-jobs/active?connected_realm_id=${currentRealm.connected_realm_id}`,
-        );
-
-        if (response.data.job) {
-          setActiveJob(response.data.job);
-        }
-      } catch {
-        // Silent because backend may not be running yet.
-      }
-    }
-
-    loadActiveJob();
-  }, []);
-
-  useEffect(() => {
-    if (!activeJob || !["queued", "running"].includes(activeJob.status)) {
-      return;
-    }
-
-    const interval = window.setInterval(async () => {
-      try {
-        const response = await axios.get<SyncJobResponse>(
-          `${API_BASE_URL}/sync-jobs/${activeJob.job_id}`,
-        );
-
-        const job = response.data.job;
-
-        if (!job) {
-          setActiveJob(null);
-          return;
-        }
-
-        setActiveJob(job);
-
-        if (
-          job.status === "complete" &&
-          !handledJobIds.current.has(job.job_id)
-        ) {
-          handledJobIds.current.add(job.job_id);
-
-          const savedPayload = saveJobResult(job);
-          setLastSync(savedPayload);
-
-          setMessage(
-            `${job.scan_mode === "quick" ? "Quick" : "Full"} Scan complete. ${
-              job.stats.auto_watch_added && job.stats.auto_watch_added > 0
-                ? `${job.stats.auto_watch_added} deal${
-                    job.stats.auto_watch_added === 1 ? "" : "s"
-                  } auto-watched.`
-                : "No new auto-watch deals."
-            } Refreshing data...`,
-          );
-
-          window.setTimeout(() => {
-            window.location.reload();
-          }, 1200);
-        }
-
-        if (job.status === "failed" && !handledJobIds.current.has(job.job_id)) {
-          handledJobIds.current.add(job.job_id);
-          setMessage(job.error ?? "Sync failed.");
-        }
-      } catch (error) {
-        setMessage(getAxiosErrorMessage(error));
-      }
-    }, 1000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [activeJob]);
-
-
-  useEffect(() => {
-    const interval = window.setInterval(async () => {
-      if (activeJob && ["queued", "running"].includes(activeJob.status)) {
-        return;
-      }
-
-      try {
-        const currentRealm = readStoredRealmSelection();
-
-        const response = await axios.get<SyncJobResponse>(
-          `${API_BASE_URL}/sync-jobs/active?connected_realm_id=${currentRealm.connected_realm_id}`,
-        );
-
-        if (response.data.job) {
-          setActiveJob(response.data.job);
-          setMessage("Reconnected to active backend sync job.");
-        }
-      } catch {
-        // Silent reconnect check.
-      }
-    }, 5000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [activeJob]);
-
-  const isSyncing =
-    activeJob !== null && ["queued", "running"].includes(activeJob.status);
-
-  const statusLabel = useMemo(() => {
-    if (activeJob && ["queued", "running"].includes(activeJob.status)) {
-      return activeJob.message || `${getPhaseLabel(activeJob.phase)}...`;
-    }
-
-    if (activeJob?.status === "failed") {
-      return activeJob.error ?? "Sync failed.";
-    }
-
-    if (message) {
-      return message;
-    }
-
-    return getProfitPilotMessage(lastSync);
-  }, [activeJob, lastSync, message]);
-
-  const progressPercent = activeJob?.progress_percent ?? 0;
-  const phase = activeJob?.phase ?? "idle";
-
-  const displayStats = activeJob?.stats ?? {
-    auctions_downloaded: lastSync?.response.auctions_downloaded,
-    items_scanned: lastSync?.response.items_scanned,
-    market_snapshots_saved: lastSync?.response.market_snapshots_saved,
-    opportunities_unlocked: lastSync?.response.opportunities_unlocked,
-    ignored_count: lastSync?.auto_watch?.ignored_count,
-    auto_watch_added: lastSync?.auto_watch?.auto_watch_added,
-  };
-
-  async function startSyncJob(scanMode: ScanMode) {
-    try {
-      const currentRealm = readStoredRealmSelection();
-
-      setRealmSelection(currentRealm);
-      setMessage(`${scanMode === "quick" ? "Quick" : "Full"} Sync job starting...`);
-
-      const response = await axios.post<SyncJobResponse>(
-        `${API_BASE_URL}/sync-jobs/start?connected_realm_id=${currentRealm.connected_realm_id}&scan_mode=${scanMode}`,
-      );
-
-      if (!response.data.job) {
-        setMessage(response.data.error ?? "Unable to start sync job.");
-        return;
-      }
-
-      setActiveJob(response.data.job);
-
-      if (response.data.status === "Existing") {
-        setMessage("Existing sync job found. Reconnecting to progress.");
-      }
-    } catch (error) {
-      setMessage(getAxiosErrorMessage(error));
-    }
+function getPhaseText(job: SyncJob | null) {
+  if (!job) {
+    return "Ready";
   }
 
   return (
-    <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/95 p-4 shadow-lg">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-amber-800 bg-amber-950/40 text-amber-300">
-            <Database size={18} />
+    job.message ||
+    job.phase_label ||
+    job.phase ||
+    (isJobRunning(job) ? "Sync running" : "Ready")
+  );
+}
+
+export default function GlobalSyncBar() {
+  const [uiMode, setUiMode] = useState<UiMode>(() => readUiMode());
+  const [realmId, setRealmId] = useState(() => readRealmId());
+  const [expanded, setExpandedState] = useState(() => readExpanded());
+  const [job, setJob] = useState<SyncJob | null>(null);
+  const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
+  const [lastSyncLabel, setLastSyncLabel] = useState("Never");
+  const [error, setError] = useState("");
+  const [startingMode, setStartingMode] = useState<ScanMode | null>(null);
+
+  const running = isJobRunning(job);
+  const progress = getProgress(job);
+  const jobStatus = getJobStatus(job);
+  const phaseText = getPhaseText(job);
+
+  const stats = useMemo(() => {
+    const captures =
+      getStat(job, "market_snapshots_saved") || getStat(job, "snapshots_saved");
+
+    const opportunities =
+      getStat(job, "opportunities_unlocked") ||
+      getStat(job, "candidates_found") ||
+      getStat(job, "alert_count");
+
+    return [
+      {
+        label: "Auctions",
+        value: formatNumber(getStat(job, "auctions_downloaded")),
+        tone: "text-white",
+      },
+      {
+        label: "Items",
+        value: formatNumber(getStat(job, "items_scanned")),
+        tone: "text-blue-400",
+      },
+      {
+        label: "Captures",
+        value: formatNumber(captures),
+        tone: "text-fuchsia-400",
+      },
+      {
+        label: "Opportunities",
+        value: formatNumber(opportunities),
+        tone: "text-emerald-400",
+      },
+      {
+        label: "Suppressed / Watched",
+        value: `${formatNumber(getStat(job, "ignored_count"))} / ${formatNumber(
+          getStat(job, "auto_watch_added"),
+        )}`,
+        tone: "text-amber-400",
+      },
+      {
+        label: "Status",
+        value: running ? "Running" : error ? "Error" : "Ready",
+        tone: error ? "text-red-400" : running ? "text-emerald-400" : "text-emerald-400",
+      },
+    ];
+  }, [job, running, error]);
+
+  function setExpanded(next: boolean) {
+    localStorage.setItem(EXPANDED_KEY, String(next));
+    setExpandedState(next);
+  }
+
+  function loadLastSyncLabel() {
+    const raw = localStorage.getItem(LAST_SYNC_KEY);
+
+    if (!raw) {
+      setLastSyncLabel("Never");
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      const value = parsed.completed_at ?? parsed.time ?? parsed.timestamp;
+
+      if (!value) {
+        setLastSyncLabel("Recently");
+        return;
+      }
+
+      const date = new Date(value);
+
+      if (Number.isNaN(date.getTime())) {
+        setLastSyncLabel("Recently");
+        return;
+      }
+
+      setLastSyncLabel(
+        date.toLocaleString([], {
+          day: "2-digit",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      );
+    } catch {
+      setLastSyncLabel("Recently");
+    }
+  }
+
+  async function loadAutoPilot() {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/autopilot/status`);
+      const state = response.data?.state ?? response.data;
+
+      setAutoPilotEnabled(Boolean(state?.enabled));
+    } catch {
+      setAutoPilotEnabled(false);
+    }
+  }
+
+  async function reconnectActiveJob() {
+    try {
+      const response = await axios.get(
+        `${API_BASE_URL}/sync-jobs/active?connected_realm_id=${realmId}`,
+      );
+
+      const activeJob = getJobFromResponse(response.data);
+
+      if (activeJob && isJobRunning(activeJob)) {
+        setJob(activeJob);
+      }
+    } catch {
+      // Keep the bar quiet if the backend is not available yet.
+    }
+  }
+
+  async function pollJob(jobId: string) {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/sync-jobs/${jobId}`);
+      const freshJob = getJobFromResponse(response.data);
+
+      if (!freshJob) {
+        return;
+      }
+
+      setJob(freshJob);
+
+      if (!isJobRunning(freshJob)) {
+        const status = getJobStatus(freshJob);
+
+        if (status === "failed" || status === "error") {
+          setError(String(freshJob.error ?? "Sync failed."));
+        } else {
+          localStorage.setItem(
+            LAST_SYNC_KEY,
+            JSON.stringify({
+              completed_at: new Date().toISOString(),
+              scan_mode: freshJob.scan_mode,
+              result: freshJob.result ?? freshJob.stats ?? {},
+            }),
+          );
+
+          loadLastSyncLabel();
+          window.dispatchEvent(new CustomEvent("goldsmith-sync-complete"));
+        }
+      }
+    } catch {
+      setError("Unable to read backend sync job.");
+    }
+  }
+
+  async function startSync(scanMode: ScanMode) {
+    try {
+      setStartingMode(scanMode);
+      setError("");
+      setExpanded(true);
+
+      const response = await axios.post(
+        `${API_BASE_URL}/sync-jobs/start?connected_realm_id=${realmId}&scan_mode=${scanMode}`,
+      );
+
+      const startedJob = getJobFromResponse(response.data);
+
+      if (!startedJob) {
+        setError("Backend did not return a sync job.");
+        return;
+      }
+
+      setJob(startedJob);
+    } catch {
+      setError("Unable to start backend sync job.");
+    } finally {
+      setStartingMode(null);
+    }
+  }
+
+  useEffect(() => {
+    loadLastSyncLabel();
+    loadAutoPilot();
+    reconnectActiveJob();
+
+    const interval = window.setInterval(() => {
+      const latestMode = readUiMode();
+      const latestRealm = readRealmId();
+
+      setUiMode(latestMode);
+      setRealmId(latestRealm);
+      loadLastSyncLabel();
+      loadAutoPilot();
+
+      if (!running) {
+        reconnectActiveJob();
+      }
+    }, 5000);
+
+    function handleModeChange() {
+      setUiMode(readUiMode());
+    }
+
+    function handleRealmChanged(event: Event) {
+      const customEvent = event as CustomEvent<{ realmId?: number }>;
+      const eventRealmId = Number(customEvent.detail?.realmId);
+
+      if (Number.isFinite(eventRealmId) && eventRealmId > 0) {
+        setRealmId(eventRealmId);
+        setJob(null);
+        reconnectActiveJob();
+      }
+    }
+
+    window.addEventListener("goldsmith-ui-mode-changed", handleModeChange);
+    window.addEventListener(GOLDSMITH_REALM_CHANGED_EVENT, handleRealmChanged);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("goldsmith-ui-mode-changed", handleModeChange);
+      window.removeEventListener(GOLDSMITH_REALM_CHANGED_EVENT, handleRealmChanged);
+    };
+  }, [realmId, running]);
+
+  useEffect(() => {
+    if (!job?.job_id || !running) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      pollJob(String(job.job_id));
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, [job?.job_id, running]);
+
+  const compact = !expanded || uiMode === "simple";
+
+  return (
+    <div className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg shadow-black/10">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-800 bg-amber-950/40 text-amber-300">
+              <Database size={17} />
+            </div>
+
+            <p className="font-bold text-white">Global Sync</p>
+
+            <span className="rounded-full border border-blue-800 bg-blue-950/40 px-2 py-1 text-[11px] font-bold text-blue-300">
+              Backend Job Engine
+            </span>
+
+            <span
+              className={[
+                "rounded-full border px-2 py-1 text-[11px] font-bold",
+                autoPilotEnabled
+                  ? "border-emerald-800 bg-emerald-950/40 text-emerald-300"
+                  : "border-slate-700 bg-slate-950 text-slate-400",
+              ].join(" ")}
+            >
+              {autoPilotEnabled ? "Auto Watch Active" : "Auto Watch Off"}
+            </span>
+
+            {running && (
+              <span className="rounded-full border border-emerald-800 bg-emerald-950/40 px-2 py-1 text-[11px] font-bold text-emerald-300">
+                {Math.round(progress)}%
+              </span>
+            )}
           </div>
 
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="font-semibold text-white">Global Sync</h3>
-
-              <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs font-semibold text-slate-300">
-                Backend Job Engine
-              </span>
-
-              <span className="rounded-full border border-emerald-800 bg-emerald-950/40 px-3 py-1 text-xs font-semibold text-emerald-300">
-                Auto Watch Active
-              </span>
-
-              {isSyncing && (
-                <span className="rounded-full border border-blue-800 bg-blue-950/40 px-3 py-1 text-xs font-semibold text-blue-300">
-                  {Math.round(progressPercent)}%
-                </span>
-              )}
-            </div>
-
-            <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-400">
-              <span className="inline-flex items-center gap-1">
-                <Server size={13} />
-                {realmSelection.realm_name} - Connected Realm #
-                {realmSelection.connected_realm_id}
-              </span>
-
-              <span>-</span>
-
-              <span>
-                Last scan: {formatDateTime(lastSync?.completed_at ?? null)}
-              </span>
-
-              <span>-</span>
-
-              <span>{statusLabel}</span>
-            </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>Global realm {realmId}</span>
+            <span>-</span>
+            <span>Last scan: {lastSyncLabel}</span>
+            <span>-</span>
+            <span className={running ? "text-emerald-300" : "text-slate-400"}>
+              {phaseText}
+            </span>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <RealmSelect
+            master
+            value={realmId}
+            onChange={(nextRealmId) => {
+              setRealmId(nextRealmId);
+              setJob(null);
+            }}
+          />
+
           <button
             type="button"
-            onClick={() => startSyncJob("quick")}
-            disabled={isSyncing}
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => startSync("quick")}
+            disabled={running || startingMode !== null}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-xs font-bold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Zap
-              size={16}
-              className={activeJob?.scan_mode === "quick" ? "animate-pulse" : ""}
-            />
-
-            {activeJob?.scan_mode === "quick" && isSyncing
-              ? "Quick Running..."
-              : "Quick Scan"}
+            <Zap size={14} />
+            Quick Scan
           </button>
 
           <button
             type="button"
-            onClick={() => startSyncJob("full")}
-            disabled={isSyncing}
-            className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-black transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => startSync("full")}
+            disabled={running || startingMode !== null}
+            className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-black transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Activity
-              size={16}
-              className={activeJob?.scan_mode === "full" ? "animate-pulse" : ""}
-            />
+            <Activity size={14} />
+            Full Scan
+          </button>
 
-            {activeJob?.scan_mode === "full" && isSyncing
-              ? "Full Running..."
-              : "Full Scan"}
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-slate-800"
+          >
+            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {expanded ? "Compact" : "Details"}
           </button>
         </div>
       </div>
 
-      {(isSyncing || activeJob?.status === "complete" || activeJob?.status === "failed") && (
-        <div className="mt-5">
-          <div className="mb-2 flex items-center justify-between text-xs">
-            <span
-              className={
-                activeJob?.status === "failed"
-                  ? "font-semibold text-red-300"
-                  : activeJob?.status === "complete"
-                    ? "font-semibold text-emerald-300"
-                    : "font-semibold text-blue-300"
-              }
-            >
-              {getPhaseLabel(phase)}
-            </span>
-
-            <span className="text-slate-500">
-              {Math.round(progressPercent)}%
-            </span>
+      {running && (
+        <div className="mt-4">
+          <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+            <span>{phaseText}</span>
+            <span>{Math.round(progress)}%</span>
           </div>
 
-          <div className="h-3 overflow-hidden rounded-full bg-slate-950">
+          <div className="h-2 overflow-hidden rounded-full bg-slate-950">
             <div
-              className={
-                activeJob?.status === "failed"
-                  ? "h-full rounded-full bg-red-500 transition-all duration-500"
-                  : activeJob?.status === "complete"
-                    ? "h-full rounded-full bg-emerald-500 transition-all duration-500"
-                    : "h-full rounded-full bg-blue-500 transition-all duration-500"
-              }
-              style={{
-                width: `${Math.max(3, Math.min(progressPercent, 100))}%`,
-              }}
+              className="h-full rounded-full bg-blue-500 transition-all duration-500"
+              style={{ width: `${progress}%` }}
             />
           </div>
-
-          {isSyncing && (
-            <div className="mt-3 flex items-center gap-2 text-sm text-slate-400">
-              <RefreshCw size={15} className="animate-spin text-amber-400" />
-              Backend sync job is running. Pages will refresh automatically when complete.
-            </div>
-          )}
         </div>
       )}
 
-      <div className="mt-4 grid gap-3 text-xs md:grid-cols-6">
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-slate-500">Auctions</p>
-
-          <p className="mt-1 font-bold text-white">
-            {formatNumber(displayStats.auctions_downloaded)}
-          </p>
+      {error && (
+        <div className="mt-4 flex items-center gap-2 rounded-xl border border-red-800 bg-red-950/40 p-3 text-xs text-red-300">
+          <AlertTriangle size={15} />
+          {error}
         </div>
+      )}
 
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-slate-500">Items Scanned</p>
-
-          <p className="mt-1 font-bold text-blue-400">
-            {formatNumber(displayStats.items_scanned)}
-          </p>
+      {!compact && (
+        <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+          {stats.map((stat) => (
+            <div
+              key={stat.label}
+              className="rounded-xl border border-slate-800 bg-slate-950 p-3"
+            >
+              <p className="text-[11px] text-slate-500">{stat.label}</p>
+              <p className={`mt-1 text-lg font-bold ${stat.tone}`}>
+                {stat.value}
+              </p>
+            </div>
+          ))}
         </div>
+      )}
 
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-slate-500">Market Captures</p>
+      {compact && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+          <span className="inline-flex items-center gap-1">
+            <CheckCircle2 size={13} className="text-emerald-400" />
+            {running ? "Sync running" : "Ready"}
+          </span>
 
-          <p className="mt-1 font-bold text-purple-400">
-            {formatNumber(displayStats.market_snapshots_saved)}
-          </p>
+          <span className="inline-flex items-center gap-1">
+            <Clock3 size={13} />
+            Last scan {lastSyncLabel}
+          </span>
+
+          <span>
+            Opportunities {formatNumber(getStat(job, "opportunities_unlocked") || getStat(job, "candidates_found"))}
+          </span>
         </div>
-
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-slate-500">Opportunities</p>
-
-          <p className="mt-1 font-bold text-emerald-400">
-            {formatNumber(displayStats.opportunities_unlocked)}
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-slate-500">Suppressed / Watched</p>
-
-          <p className="mt-1 font-bold text-amber-400">
-            {formatNumber(displayStats.ignored_count)} /{" "}
-            {formatNumber(displayStats.auto_watch_added)}
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-slate-500">Status</p>
-
-          <p
-            className={
-              activeJob?.status === "failed"
-                ? "mt-1 inline-flex items-center gap-1 font-bold text-red-400"
-                : "mt-1 inline-flex items-center gap-1 font-bold text-emerald-400"
-            }
-          >
-            <CheckCircle2 size={13} />
-            {activeJob?.status === "failed" ? "Failed" : isSyncing ? "Running" : "Ready"}
-          </p>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

@@ -77,6 +77,25 @@ type DealAlert = {
   decision_note: string;
   base_signal_confidence: number;
   memory_adjusted_confidence: number;
+  pre_feedback_confidence: number;
+  feedback_adjustment: number;
+  feedback_label: string;
+  feedback_note: string;
+  performance_feedback: {
+    score_adjustment: number;
+    feedback_label: string;
+    feedback_note: string;
+    sources: {
+      group: string;
+      name: string;
+      sold_count: number;
+      roi_percent: number;
+      win_rate_percent: number;
+      feedback_label: string;
+      raw_adjustment: number;
+      weighted_adjustment: number;
+    }[];
+  };
 };
 
 type DealSummary = {
@@ -354,6 +373,34 @@ function getGradeClass(grade: string) {
   }
 }
 
+
+function getFeedbackClass(label: string) {
+  switch (label) {
+    case "Boost":
+      return "border-emerald-700 bg-emerald-950/50 text-emerald-300";
+    case "Positive":
+      return "border-emerald-800 bg-emerald-950/40 text-emerald-300";
+    case "Neutral":
+      return "border-slate-700 bg-slate-950 text-slate-300";
+    case "Caution":
+      return "border-amber-800 bg-amber-950/40 text-amber-300";
+    case "Penalty":
+      return "border-red-800 bg-red-950/40 text-red-300";
+    case "Learning":
+      return "border-blue-800 bg-blue-950/40 text-blue-300";
+    default:
+      return "border-slate-700 bg-slate-950 text-slate-300";
+  }
+}
+
+function formatAdjustment(value: number) {
+  if (value > 0) {
+    return `+${value}`;
+  }
+
+  return String(value);
+}
+
 export default function DealAlerts() {
   const [realm, setRealm] = useState(11);
   const [alerts, setAlerts] = useState<DealAlert[]>([]);
@@ -368,6 +415,7 @@ export default function DealAlerts() {
   );
   const [ignoringItem, setIgnoringItem] = useState<number | null>(null);
   const [ignoringCategory, setIgnoringCategory] = useState<string | null>(null);
+  const [queueingItem, setQueueingItem] = useState<number | null>(null);
 
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
@@ -551,6 +599,47 @@ export default function DealAlerts() {
       setError("Unable to ignore category.");
     } finally {
       setIgnoringCategory(null);
+    }
+  }
+
+
+  async function queueBuy(alert: DealAlert) {
+    try {
+      setQueueingItem(alert.item_id);
+      setError("");
+      setSuccessMessage("");
+
+      if (alert.suggested_buy_quantity <= 0) {
+        setError("GoldSmith does not recommend buying this item.");
+        return;
+      }
+
+      await axios.post(`${API_BASE_URL}/buy-queue/from-alert`, {
+        item_id: alert.item_id,
+        realm_id: alert.realm_id,
+        item_name: alert.name,
+        category: alert.goldsmith_category,
+        icon_url: alert.icon_url,
+        quality: alert.quality,
+        decision_grade: alert.decision_grade,
+        final_decision: alert.final_decision,
+        decision_score: alert.decision_score,
+        buy_pressure: alert.buy_pressure,
+        position_size_label: alert.position_size_label,
+        signal: alert.signal,
+        memory_price_state: alert.memory_price_state,
+        suggested_quantity: alert.suggested_buy_quantity,
+        max_price_each: alert.suggested_buy_below,
+        target_sale_price_each: alert.target_resale_price,
+        expected_margin_percent: alert.estimated_margin_percent,
+        reason: alert.decision_note || alert.signal_reason,
+      });
+
+      setSuccessMessage(`${alert.name} added to Buy Queue.`);
+    } catch {
+      setError("Unable to add item to Buy Queue.");
+    } finally {
+      setQueueingItem(null);
     }
   }
 
@@ -762,6 +851,15 @@ export default function DealAlerts() {
                     Grade <span className={getGradeClass(topAlert.decision_grade)}>{topAlert.decision_grade}</span>
                     {topAlert.final_decision}
                   </div>
+
+                  <div
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getFeedbackClass(
+                      topAlert.feedback_label,
+                    )}`}
+                  >
+                    Feedback {formatAdjustment(topAlert.feedback_adjustment)}
+                    {topAlert.feedback_label}
+                  </div>
                 </div>
 
                 <h3 className="text-2xl font-bold text-white">
@@ -780,7 +878,21 @@ export default function DealAlerts() {
                   {topAlert.decision_note}
                 </p>
 
+                <p className="mt-2 text-sm text-blue-300">
+                  {topAlert.feedback_note}
+                </p>
+
                 <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => queueBuy(topAlert)}
+                    disabled={queueingItem === topAlert.item_id}
+                    className="inline-flex items-center gap-2 rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-900/40 disabled:opacity-60"
+                  >
+                    <ShoppingCart size={14} />
+                    Queue Buy
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => ignoreItem(topAlert)}
@@ -1013,6 +1125,14 @@ export default function DealAlerts() {
                         Score {alert.decision_score.toFixed(1)} - {alert.buy_pressure}
                       </p>
 
+                      <p
+                        className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${getFeedbackClass(
+                          alert.feedback_label,
+                        )}`}
+                      >
+                        Feedback {formatAdjustment(alert.feedback_adjustment)} - {alert.feedback_label}
+                      </p>
+
                       <p className="mt-1 text-xs text-slate-500">
                         {alert.position_size_label}
                       </p>
@@ -1155,6 +1275,16 @@ export default function DealAlerts() {
                             Watch
                           </button>
                         )}
+
+                        <button
+                          type="button"
+                          onClick={() => queueBuy(alert)}
+                          disabled={queueingItem === alert.item_id}
+                          className="inline-flex items-center gap-2 rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-900/40 disabled:opacity-60"
+                        >
+                          <ShoppingCart size={14} />
+                          Queue
+                        </button>
 
                         <button
                           type="button"

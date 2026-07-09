@@ -4,6 +4,7 @@ from sqlalchemy.future import select
 
 from app.services.ignore_rules import filter_ignored_tracked_items, get_active_ignore_rules
 from app.services.market_memory import build_market_memory_map, empty_market_memory
+from app.services.performance_feedback import build_feedback_adjustment_map, combine_performance_feedback_adjustments
 from app.utils.realms import get_realm_display_name
 from database import get_db
 from models import PriceSnapshot, TrackedItem, WatchlistItem
@@ -734,6 +735,7 @@ def serialize_deal_alert(
     watched_keys: set[tuple[int, int]],
     snapshot_map: dict[int, list[PriceSnapshot]],
     market_memory_map: dict[int, dict] | None = None,
+    performance_feedback_map: dict | None = None,
 ) -> dict:
     item_snapshots = snapshot_map.get(item.item_id, [])
 
@@ -767,9 +769,34 @@ def serialize_deal_alert(
         price_change_percent=price_change_percent,
     )
 
-    memory_adjusted_confidence = apply_market_memory_to_confidence(
+    pre_feedback_confidence = apply_market_memory_to_confidence(
         base_confidence=base_confidence,
         market_memory=market_memory,
+    )
+
+    initial_signal_data = build_deal_signal(
+        item=item,
+        price_change_percent=price_change_percent,
+        confidence=pre_feedback_confidence,
+        market_memory=market_memory,
+    )
+
+    performance_feedback = combine_performance_feedback_adjustments(
+        feedback_map=performance_feedback_map,
+        category=item.goldsmith_category,
+        signal=initial_signal_data["signal"],
+        memory_price_state=market_memory["price_state"],
+    )
+
+    memory_adjusted_confidence = round(
+        max(
+            1,
+            min(
+                pre_feedback_confidence + performance_feedback["score_adjustment"],
+                100,
+            ),
+        ),
+        1,
     )
 
     signal_data = build_deal_signal(
@@ -848,7 +875,12 @@ def serialize_deal_alert(
         "signal_action": signal_data["action"],
         "signal_confidence": memory_adjusted_confidence,
         "base_signal_confidence": base_confidence,
+        "pre_feedback_confidence": pre_feedback_confidence,
         "memory_adjusted_confidence": memory_adjusted_confidence,
+        "feedback_adjustment": performance_feedback["score_adjustment"],
+        "feedback_label": performance_feedback["feedback_label"],
+        "feedback_note": performance_feedback["feedback_note"],
+        "performance_feedback": performance_feedback,
         "is_watched": is_watched,
         "liquidity_score": liquidity_score,
         "sale_speed": sale_speed,
@@ -936,6 +968,12 @@ def build_deal_summary(items: list[dict]) -> dict:
         "avoid_capital_count": len(
             [item for item in items if item.get("capital_risk_label") == "Avoid"]
         ),
+        "feedback_boost_count": len(
+            [item for item in items if item.get("feedback_label") in ["Boost", "Positive"]]
+        ),
+        "feedback_caution_count": len(
+            [item for item in items if item.get("feedback_label") in ["Penalty", "Caution"]]
+        ),
     }
 
 
@@ -956,6 +994,9 @@ def should_auto_watch(alert: dict) -> bool:
         return False
 
     if alert.get("memory_price_state") in ["Overpriced", "Volatile"]:
+        return False
+
+    if alert.get("feedback_label") == "Penalty" and alert.get("feedback_adjustment", 0) <= -6:
         return False
 
     if alert["signal"] == "MEMORY_BUY" and alert["signal_confidence"] >= 72:
@@ -1032,12 +1073,18 @@ async def get_deal_alerts(
             days=30,
         )
 
+        feedback_map = await build_feedback_adjustment_map(
+            db=db,
+            connected_realm_id=connected_realm_id,
+        )
+
         alert_items = [
             serialize_deal_alert(
                 item=item,
                 watched_keys=watched_keys,
                 snapshot_map=snapshot_map,
                 market_memory_map=memory_map,
+                performance_feedback_map=feedback_map,
             )
             for item in tracked_items
         ]
@@ -1047,6 +1094,7 @@ async def get_deal_alerts(
                 item.get("final_decision") == "Avoid",
                 item["signal_priority"],
                 -item.get("decision_score", 0),
+                -item.get("feedback_adjustment", 0),
                 -item.get("memory_score", 0),
                 item["capital_risk_label"] == "Avoid",
                 item["capital_risk_label"] == "High",
@@ -1126,12 +1174,18 @@ async def auto_watch_deals(
             days=30,
         )
 
+        feedback_map = await build_feedback_adjustment_map(
+            db=db,
+            connected_realm_id=connected_realm_id,
+        )
+
         alert_items = [
             serialize_deal_alert(
                 item=item,
                 watched_keys=watched_keys,
                 snapshot_map=snapshot_map,
                 market_memory_map=memory_map,
+                performance_feedback_map=feedback_map,
             )
             for item in tracked_items
         ]
@@ -1148,6 +1202,7 @@ async def auto_watch_deals(
                 item["signal_priority"],
                 -item.get("decision_score", 0),
                 -item["signal_confidence"],
+                -item.get("feedback_adjustment", 0),
                 -item["memory_score"],
                 -item["liquidity_score"],
                 -item["opportunity_score"],
