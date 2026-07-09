@@ -10,6 +10,7 @@ from app.api.capture import router as capture_router
 from app.api.dashboard import router as dashboard_router
 from app.api.deals import router as deals_router
 from app.api.health import router as health_router
+from app.api.gold_plan import router as gold_plan_router
 from app.api.ignore_rules import router as ignore_rules_router
 from app.api.market_memory import router as market_memory_router
 from app.api.performance_feedback import router as performance_feedback_router
@@ -55,6 +56,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(gold_plan_router)
 app.include_router(action_center_router)
 app.include_router(autopilot_router)
 app.include_router(buy_queue_router)
