@@ -4,6 +4,7 @@ import axios from "axios";
 import {
   AlertTriangle,
   BellRing,
+  Brain,
   CheckCircle2,
   Compass,
   Eye,
@@ -55,6 +56,16 @@ type DealAlert = {
   target_resale_price: number;
   estimated_profit_before_costs: number;
   estimated_margin_percent: number;
+  memory_price_state: string;
+  memory_score: number;
+  memory_confidence: string;
+  memory_sample_count: number;
+  memory_note: string;
+  memory_volatility_score: number;
+  memory_discount_percent: number;
+  memory_price_position_percent: number;
+  memory_average_7_day_price: number | null;
+  memory_average_30_day_price: number | null;
 };
 
 type WatchlistPriorityItem = {
@@ -101,6 +112,9 @@ type ActionCenterResponse = {
     actionable_count: number;
     auto_watch_ready_count: number;
     watchlist_count: number;
+    suppressed_count?: number;
+    memory_undervalued_count?: number;
+    memory_volatile_count?: number;
     capture: {
       latest_capture_at: string | null;
       item_count: number;
@@ -202,6 +216,29 @@ function getRiskClass(riskLevel: string) {
       return "text-red-400";
     default:
       return "text-slate-400";
+  }
+}
+
+function getMemoryClass(priceState: string) {
+  switch (priceState) {
+    case "Deep Undervalued":
+      return "border-emerald-700 bg-emerald-950/50 text-emerald-300";
+    case "Undervalued":
+      return "border-emerald-800 bg-emerald-950/40 text-emerald-300";
+    case "Below Normal":
+      return "border-blue-800 bg-blue-950/40 text-blue-300";
+    case "Fair Value":
+      return "border-slate-700 bg-slate-950 text-slate-300";
+    case "Above Normal":
+      return "border-amber-800 bg-amber-950/40 text-amber-300";
+    case "Overpriced":
+      return "border-red-800 bg-red-950/40 text-red-300";
+    case "Volatile":
+      return "border-purple-800 bg-purple-950/40 text-purple-300";
+    case "Learning":
+      return "border-slate-700 bg-slate-950 text-slate-400";
+    default:
+      return "border-slate-700 bg-slate-950 text-slate-300";
   }
 }
 
@@ -406,13 +443,24 @@ export default function Dashboard() {
               )}
 
               <div>
-                <div
-                  className={`mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
-                    topAlert.signal,
-                  )}`}
-                >
-                  {getSignalIcon(topAlert.signal)}
-                  {topAlert.signal_label}
+                <div className="mb-2 flex flex-wrap gap-2">
+                  <div
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
+                      topAlert.signal,
+                    )}`}
+                  >
+                    {getSignalIcon(topAlert.signal)}
+                    {topAlert.signal_label}
+                  </div>
+
+                  <div
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getMemoryClass(
+                      topAlert.memory_price_state,
+                    )}`}
+                  >
+                    <Brain size={14} />
+                    {topAlert.memory_price_state}
+                  </div>
                 </div>
 
                 <h3 className="text-xl font-bold text-white">
@@ -421,6 +469,10 @@ export default function Dashboard() {
 
                 <p className="mt-1 text-sm text-slate-400">
                   {topAlert.signal_action}
+                </p>
+
+                <p className="mt-2 text-sm text-blue-300">
+                  {topAlert.memory_note}
                 </p>
               </div>
             </div>

@@ -11,6 +11,7 @@ from app.api.deals import (
     should_auto_watch,
 )
 from app.services.ignore_rules import filter_ignored_tracked_items, get_active_ignore_rules
+from app.services.market_memory import build_market_memory_map
 from app.utils.realms import get_realm_display_name
 from database import get_db
 from models import MarketSnapshot, TrackedItem, WatchlistItem
@@ -256,11 +257,19 @@ async def get_action_center(
             db=db,
         )
 
+        memory_map = await build_market_memory_map(
+            db=db,
+            connected_realm_id=connected_realm_id,
+            items=tracked_items,
+            days=30,
+        )
+
         alert_items = [
             serialize_deal_alert(
                 item=item,
                 watched_keys=watched_keys,
                 snapshot_map=snapshot_map,
+                market_memory_map=memory_map,
             )
             for item in tracked_items
         ]
@@ -358,6 +367,14 @@ async def get_action_center(
                 "auto_watch_ready_count": len(auto_watch_ready),
                 "watchlist_count": watchlist_count,
                 "suppressed_count": ignored_count,
+                "memory_undervalued_count": len([
+                    alert for alert in alert_items
+                    if alert.get("memory_price_state") in ["Deep Undervalued", "Undervalued", "Below Normal"]
+                ]),
+                "memory_volatile_count": len([
+                    alert for alert in alert_items
+                    if alert.get("memory_price_state") == "Volatile"
+                ]),
                 "capture": capture_summary,
                 "deals": deal_summary,
             },

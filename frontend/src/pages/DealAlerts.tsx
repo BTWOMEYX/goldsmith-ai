@@ -3,6 +3,7 @@ import axios from "axios";
 import {
   AlertTriangle,
   Ban,
+  Brain,
   BellRing,
   CheckCircle2,
   Coins,
@@ -58,6 +59,16 @@ type DealAlert = {
   capital_action: string;
   buy_strategy: string;
   capital_note: string;
+  memory_price_state: string;
+  memory_score: number;
+  memory_confidence: string;
+  memory_sample_count: number;
+  memory_note: string;
+  memory_volatility_score: number;
+  memory_discount_percent: number;
+  memory_price_position_percent: number;
+  memory_average_7_day_price: number | null;
+  memory_average_30_day_price: number | null;
 };
 
 type DealSummary = {
@@ -137,6 +148,18 @@ const CATEGORY_FILTERS = [
 ];
 
 const CAPITAL_FILTERS = ["All Capital", "Low", "Medium", "High", "Avoid"];
+
+const MEMORY_FILTERS = [
+  "All Memory",
+  "Deep Undervalued",
+  "Undervalued",
+  "Below Normal",
+  "Fair Value",
+  "Above Normal",
+  "Overpriced",
+  "Volatile",
+  "Learning",
+];
 
 function formatGold(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -231,6 +254,37 @@ function getSpeedClass(saleSpeed: string) {
   }
 }
 
+function getMemoryClass(priceState: string) {
+  switch (priceState) {
+    case "Deep Undervalued":
+      return "border-emerald-700 bg-emerald-950/50 text-emerald-300";
+    case "Undervalued":
+      return "border-emerald-800 bg-emerald-950/40 text-emerald-300";
+    case "Below Normal":
+      return "border-blue-800 bg-blue-950/40 text-blue-300";
+    case "Fair Value":
+      return "border-slate-700 bg-slate-950 text-slate-300";
+    case "Above Normal":
+      return "border-amber-800 bg-amber-950/40 text-amber-300";
+    case "Overpriced":
+      return "border-red-800 bg-red-950/40 text-red-300";
+    case "Volatile":
+      return "border-purple-800 bg-purple-950/40 text-purple-300";
+    case "Learning":
+      return "border-slate-700 bg-slate-950 text-slate-400";
+    default:
+      return "border-slate-700 bg-slate-950 text-slate-300";
+  }
+}
+
+function getMemoryDealCount(alerts: DealAlert[]) {
+  return alerts.filter((alert) =>
+    ["Deep Undervalued", "Undervalued", "Below Normal"].includes(
+      alert.memory_price_state,
+    ),
+  ).length;
+}
+
 export default function DealAlerts() {
   const [realm, setRealm] = useState(11);
   const [alerts, setAlerts] = useState<DealAlert[]>([]);
@@ -253,6 +307,7 @@ export default function DealAlerts() {
   const [signalFilter, setSignalFilter] = useState("All Signals");
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
   const [capitalFilter, setCapitalFilter] = useState("All Capital");
+  const [memoryFilter, setMemoryFilter] = useState("All Memory");
 
   async function loadAlerts(realmId: number) {
     try {
@@ -467,9 +522,19 @@ export default function DealAlerts() {
         capitalFilter === "All Capital" ||
         alert.capital_risk_label === capitalFilter;
 
-      return matchesSearch && matchesSignal && matchesCategory && matchesCapital;
+      const matchesMemory =
+        memoryFilter === "All Memory" ||
+        alert.memory_price_state === memoryFilter;
+
+      return (
+        matchesSearch &&
+        matchesSignal &&
+        matchesCategory &&
+        matchesCapital &&
+        matchesMemory
+      );
     });
-  }, [alerts, capitalFilter, categoryFilter, searchTerm, signalFilter]);
+  }, [alerts, capitalFilter, categoryFilter, memoryFilter, searchTerm, signalFilter]);
 
   return (
     <div className="space-y-6">
@@ -481,7 +546,7 @@ export default function DealAlerts() {
           </div>
 
           <p className="mt-1 text-sm text-slate-400">
-            Buy queue with capital guardrails, sale speed, exposure limits and smart ignore filtering.
+            Buy queue with capital guardrails, sale speed, exposure limits, market memory and smart ignore filtering.
           </p>
         </div>
 
@@ -522,7 +587,7 @@ export default function DealAlerts() {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-6">
+      <div className="grid gap-4 md:grid-cols-7">
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
           <p className="text-xs text-slate-500">Auto Watch</p>
           <p className="mt-2 text-2xl font-bold text-emerald-400">
@@ -559,6 +624,13 @@ export default function DealAlerts() {
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+          <p className="text-xs text-slate-500">Memory Deals</p>
+          <p className="mt-2 text-2xl font-bold text-blue-400">
+            {getMemoryDealCount(alerts)}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
           <p className="text-xs text-slate-500">Suppressed</p>
           <p className="mt-2 text-2xl font-bold text-slate-300">
             {ignoredCount}
@@ -581,13 +653,24 @@ export default function DealAlerts() {
               )}
 
               <div>
-                <div
-                  className={`mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
-                    topAlert.signal,
-                  )}`}
-                >
-                  {getSignalIcon(topAlert.signal)}
-                  {topAlert.signal_label}
+                <div className="mb-2 flex flex-wrap gap-2">
+                  <div
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(
+                      topAlert.signal,
+                    )}`}
+                  >
+                    {getSignalIcon(topAlert.signal)}
+                    {topAlert.signal_label}
+                  </div>
+
+                  <div
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getMemoryClass(
+                      topAlert.memory_price_state,
+                    )}`}
+                  >
+                    <Brain size={14} />
+                    {topAlert.memory_price_state}
+                  </div>
                 </div>
 
                 <h3 className="text-2xl font-bold text-white">
@@ -596,6 +679,10 @@ export default function DealAlerts() {
 
                 <p className="mt-1 text-sm text-slate-400">
                   {topAlert.capital_note}
+                </p>
+
+                <p className="mt-2 text-sm text-blue-300">
+                  {topAlert.memory_note}
                 </p>
 
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -649,7 +736,7 @@ export default function DealAlerts() {
       )}
 
       <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-        <div className="grid gap-3 lg:grid-cols-4">
+        <div className="grid gap-3 lg:grid-cols-5">
           <div className="relative">
             <Search
               size={16}
@@ -699,17 +786,30 @@ export default function DealAlerts() {
               </option>
             ))}
           </select>
+
+          <select
+            value={memoryFilter}
+            onChange={(event) => setMemoryFilter(event.target.value)}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-amber-500"
+          >
+            {MEMORY_FILTERS.map((memory) => (
+              <option key={memory} value={memory}>
+                {memory}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
         <div className="overflow-x-auto">
-          <table className="min-w-[1580px] w-full text-left text-sm">
+          <table className="min-w-[1760px] w-full text-left text-sm">
             <thead className="border-b border-slate-800 bg-slate-950 text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">Item</th>
                 <th className="px-4 py-3">Signal</th>
                 <th className="px-4 py-3">Capital</th>
+                <th className="px-4 py-3">Memory</th>
                 <th className="px-4 py-3">Buy Plan</th>
                 <th className="px-4 py-3">Current</th>
                 <th className="px-4 py-3">Buy Below</th>
@@ -726,7 +826,7 @@ export default function DealAlerts() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={13}
                     className="px-4 py-10 text-center text-slate-500"
                   >
                     Loading deal alerts...
@@ -735,7 +835,7 @@ export default function DealAlerts() {
               ) : filteredAlerts.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={13}
                     className="px-4 py-10 text-center text-slate-500"
                   >
                     No alerts match your filters. Run Global Sync or loosen filters.
@@ -794,6 +894,25 @@ export default function DealAlerts() {
 
                       <p className="mt-1 text-xs text-slate-500">
                         {alert.capital_action}
+                      </p>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-semibold ${getMemoryClass(
+                          alert.memory_price_state,
+                        )}`}
+                      >
+                        <Brain size={13} />
+                        {alert.memory_price_state}
+                      </span>
+
+                      <p className="mt-1 text-xs text-slate-500">
+                        Score {alert.memory_score.toFixed(1)} - {alert.memory_confidence}
+                      </p>
+
+                      <p className="mt-1 text-xs text-slate-500">
+                        30d avg {formatGold(alert.memory_average_30_day_price)}
                       </p>
                     </td>
 

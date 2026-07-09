@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.services.ignore_rules import filter_ignored_tracked_items, get_active_ignore_rules
+from app.services.market_memory import build_market_memory_map, empty_market_memory
 from app.utils.realms import get_realm_display_name
 from database import get_db
 from models import PriceSnapshot, TrackedItem, WatchlistItem
@@ -434,6 +435,7 @@ def serialize_deal_alert(
     item: TrackedItem,
     watched_keys: set[tuple[int, int]],
     snapshot_map: dict[int, list[PriceSnapshot]],
+    market_memory_map: dict[int, dict] | None = None,
 ) -> dict:
     item_snapshots = snapshot_map.get(item.item_id, [])
 
@@ -488,6 +490,15 @@ def serialize_deal_alert(
         confidence=confidence,
     )
 
+    market_memory = (
+        market_memory_map.get(item.item_id)
+        if market_memory_map and market_memory_map.get(item.item_id)
+        else empty_market_memory(
+            item_id=item.item_id,
+            current_price=item.current_price,
+        )
+    )
+
     is_watched = (item.realm_id, item.item_id) in watched_keys
 
     return {
@@ -519,6 +530,17 @@ def serialize_deal_alert(
         "liquidity_score": liquidity_score,
         "sale_speed": sale_speed,
         "suggested_buy_quantity": suggested_quantity,
+        "market_memory": market_memory,
+        "memory_price_state": market_memory["price_state"],
+        "memory_score": market_memory["memory_score"],
+        "memory_confidence": market_memory["memory_confidence"],
+        "memory_sample_count": market_memory["sample_count"],
+        "memory_note": market_memory["memory_note"],
+        "memory_volatility_score": market_memory["volatility_score"],
+        "memory_discount_percent": market_memory["current_vs_30_day_average_percent"],
+        "memory_price_position_percent": market_memory["price_position_30_day_percent"],
+        "memory_average_7_day_price": market_memory["average_7_day_price"],
+        "memory_average_30_day_price": market_memory["average_30_day_price"],
         **price_targets,
         **capital_guardrails,
     } | {
@@ -646,11 +668,19 @@ async def get_deal_alerts(
             db=db,
         )
 
+        memory_map = await build_market_memory_map(
+            db=db,
+            connected_realm_id=connected_realm_id,
+            items=tracked_items,
+            days=30,
+        )
+
         alert_items = [
             serialize_deal_alert(
                 item=item,
                 watched_keys=watched_keys,
                 snapshot_map=snapshot_map,
+                market_memory_map=memory_map,
             )
             for item in tracked_items
         ]
@@ -659,6 +689,7 @@ async def get_deal_alerts(
             key=lambda item: (
                 item["signal_priority"],
                 -item["signal_confidence"],
+                -item.get("memory_score", 0),
                 item["capital_risk_label"] == "Avoid",
                 item["capital_risk_label"] == "High",
                 -item["liquidity_score"],
@@ -729,11 +760,19 @@ async def auto_watch_deals(
             db=db,
         )
 
+        memory_map = await build_market_memory_map(
+            db=db,
+            connected_realm_id=connected_realm_id,
+            items=tracked_items,
+            days=30,
+        )
+
         alert_items = [
             serialize_deal_alert(
                 item=item,
                 watched_keys=watched_keys,
                 snapshot_map=snapshot_map,
+                market_memory_map=memory_map,
             )
             for item in tracked_items
         ]
