@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import RealmSelect from "../components/RealmSelect";
+import { getGlobalRealmId } from "../utils/globalRealm";
 
 type FeedbackSummary = {
   total_trade_count: number;
@@ -140,7 +141,7 @@ function getInsightClass(tone: string) {
 }
 
 export default function PerformanceFeedback() {
-  const [realm, setRealm] = useState(11);
+  const [realm, setRealm] = useState(() => getGlobalRealmId());
   const [summary, setSummary] = useState<FeedbackSummary>(EMPTY_SUMMARY);
   const [insights, setInsights] = useState<FeedbackInsight[]>([]);
   const [strongestGroups, setStrongestGroups] = useState<FeedbackRow[]>([]);

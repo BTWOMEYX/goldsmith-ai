@@ -11,8 +11,8 @@ import {
 } from "lucide-react";
 
 import AutoPilotPanel from "../components/AutoPilotPanel";
-import StrategyProfilePanel from "../components/StrategyProfilePanel";
 import RealmSelect from "../components/RealmSelect";
+import { getGlobalRealmId } from "../utils/globalRealm";
 
 type IgnoreRule = {
   id: number;
@@ -113,7 +113,7 @@ function getRuleClass(rule: IgnoreRule) {
 }
 
 export default function SettingsPage() {
-  const [realm, setRealm] = useState(11);
+  const [realm, setRealm] = useState(() => getGlobalRealmId());
   const [rules, setRules] = useState<IgnoreRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

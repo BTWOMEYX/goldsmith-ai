@@ -99,6 +99,7 @@ function readUiMode(): UiMode {
 
 export default function App() {
   const [uiMode, setUiModeState] = useState<UiMode>(() => readUiMode());
+  const [refreshKey, setRefreshKey] = useState(0);
 
   function setUiMode(nextMode: UiMode) {
     localStorage.setItem(UI_MODE_KEY, nextMode);
@@ -110,6 +111,25 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.goldsmithMode = uiMode;
   }, [uiMode]);
+
+
+  useEffect(() => {
+    function refreshActivePage() {
+      setRefreshKey((current) => current + 1);
+    }
+
+    window.addEventListener("goldsmith-sync-complete", refreshActivePage);
+    window.addEventListener("goldsmith-data-refresh", refreshActivePage);
+    window.addEventListener("goldsmith-realm-changed", refreshActivePage);
+    window.addEventListener("goldsmith-strategy-changed", refreshActivePage);
+
+    return () => {
+      window.removeEventListener("goldsmith-sync-complete", refreshActivePage);
+      window.removeEventListener("goldsmith-data-refresh", refreshActivePage);
+      window.removeEventListener("goldsmith-realm-changed", refreshActivePage);
+      window.removeEventListener("goldsmith-strategy-changed", refreshActivePage);
+    };
+  }, []);
 
   const visibleNavItems = useMemo(() => {
     if (uiMode === "pro") {
@@ -294,7 +314,7 @@ export default function App() {
 
             <GlobalSyncBar />
 
-            <Routes>
+            <Routes key={refreshKey}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/alerts" element={<DealAlerts />} />
               <Route path="/buy-queue" element={<BuyQueue />} />

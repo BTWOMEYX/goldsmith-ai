@@ -40,13 +40,6 @@ type RealmSelectProps = {
 
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
-const FALLBACK_REALMS: RealmOption[] = [
-  {
-    connected_realm_id: 11,
-    name: "Illidan",
-  },
-];
-
 function buildRealmOptions(items: RealmApiItem[]): RealmOption[] {
   const options: RealmOption[] = [];
 
@@ -87,38 +80,66 @@ function buildRealmOptions(items: RealmApiItem[]): RealmOption[] {
     }
   }
 
-  return [...deduped.values()].sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
+  return [...deduped.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export default function RealmSelect({
+function HiddenRealmBridge({ value, onChange }: RealmSelectProps) {
+  useEffect(() => {
+    const globalRealm = getGlobalRealmId(value ?? 11);
+    onChange?.(globalRealm);
+
+    return listenForGlobalRealmChange((realmId) => {
+      onChange?.(realmId);
+    });
+  }, [onChange, value]);
+
+  return null;
+}
+
+function MasterRealmSelect({
   value,
   onChange,
   className = "",
-  master = false,
 }: RealmSelectProps) {
-  const [options, setOptions] = useState<RealmOption[]>(FALLBACK_REALMS);
+  const [options, setOptions] = useState<RealmOption[]>([]);
   const [selectedRealm, setSelectedRealm] = useState(() =>
     getGlobalRealmId(value ?? 11),
   );
   const [loading, setLoading] = useState(false);
 
+  const visibleOptions = useMemo(() => {
+    const hasSelected = options.some(
+      (option) => option.connected_realm_id === selectedRealm,
+    );
+
+    if (hasSelected) {
+      return options;
+    }
+
+    return [
+      {
+        connected_realm_id: selectedRealm,
+        name: `Realm ${selectedRealm}`,
+      },
+      ...options,
+    ];
+  }, [options, selectedRealm]);
+
   const currentRealmName = useMemo(() => {
     return (
-      options.find(
+      visibleOptions.find(
         (option) => option.connected_realm_id === selectedRealm,
       )?.name ?? `Realm ${selectedRealm}`
     );
-  }, [options, selectedRealm]);
+  }, [visibleOptions, selectedRealm]);
 
-  function applyRealm(realmId: number, syncGlobal: boolean) {
-    setSelectedRealm(realmId);
-
-    if (syncGlobal) {
-      setGlobalRealmId(realmId);
+  function applyRealm(realmId: number) {
+    if (!Number.isFinite(realmId) || realmId <= 0) {
+      return;
     }
 
+    setSelectedRealm(realmId);
+    setGlobalRealmId(realmId);
     onChange?.(realmId);
   }
 
@@ -137,7 +158,7 @@ export default function RealmSelect({
         setOptions(nextOptions);
       }
     } catch {
-      setOptions((current) => (current.length > 0 ? current : FALLBACK_REALMS));
+      // Keep the current selected global realm visible even if realms fail to load.
     } finally {
       setLoading(false);
     }
@@ -167,20 +188,16 @@ export default function RealmSelect({
     }
   }, [value, selectedRealm]);
 
-  if (!master) {
-    return null;
-  }
-
   return (
     <div className={`relative ${className}`}>
       <select
         value={selectedRealm}
-        onChange={(event) => applyRealm(Number(event.target.value), true)}
+        onChange={(event) => applyRealm(Number(event.target.value))}
         disabled={loading}
         title={`Global realm: ${currentRealmName}`}
         className="min-w-[210px] rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-semibold text-white outline-none transition focus:border-amber-500 disabled:opacity-60"
       >
-        {options.map((option) => (
+        {visibleOptions.map((option) => (
           <option
             key={`${option.connected_realm_id}-${option.name}`}
             value={option.connected_realm_id}
@@ -192,4 +209,12 @@ export default function RealmSelect({
       </select>
     </div>
   );
+}
+
+export default function RealmSelect(props: RealmSelectProps) {
+  if (!props.master) {
+    return <HiddenRealmBridge {...props} />;
+  }
+
+  return <MasterRealmSelect {...props} />;
 }

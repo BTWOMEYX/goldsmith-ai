@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import RealmSelect from "../components/RealmSelect";
+import { getGlobalRealmId } from "../utils/globalRealm";
 
 type SignalItem = {
   item_id: number;
@@ -221,7 +222,7 @@ function formatDate(value: string | null) {
 }
 
 export default function Analytics() {
-  const [realm, setRealm] = useState(11);
+  const [realm, setRealm] = useState(() => getGlobalRealmId());
   const [realmName, setRealmName] = useState("Illidan");
   const [items, setItems] = useState<SignalItem[]>([]);
   const [topSignal, setTopSignal] = useState<SignalItem | null>(null);

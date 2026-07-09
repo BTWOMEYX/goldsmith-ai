@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import RealmSelect from "../components/RealmSelect";
+import { getGlobalRealmId } from "../utils/globalRealm";
 
 type TradeEntry = {
   id: number;
@@ -168,7 +169,7 @@ function getGradeClass(grade: string | null) {
 }
 
 export default function ProfitTracker() {
-  const [realm, setRealm] = useState(11);
+  const [realm, setRealm] = useState(() => getGlobalRealmId());
   const [statusFilter, setStatusFilter] = useState("open");
   const [trades, setTrades] = useState<TradeEntry[]>([]);
   const [summary, setSummary] = useState<TradeSummary>(EMPTY_SUMMARY);

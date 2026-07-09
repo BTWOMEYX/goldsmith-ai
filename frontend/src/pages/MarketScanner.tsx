@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import RealmSelect from "../components/RealmSelect";
+import { getGlobalRealmId } from "../utils/globalRealm";
 
 type MarketItem = {
   id: number;
@@ -265,7 +266,7 @@ function getWatchlistKey(realmId: number, itemId: number) {
 }
 
 export default function MarketScanner() {
-  const [realm, setRealm] = useState(11);
+  const [realm, setRealm] = useState(() => getGlobalRealmId());
   const [realmName, setRealmName] = useState("Illidan");
   const [items, setItems] = useState<MarketItem[]>([]);
   const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);

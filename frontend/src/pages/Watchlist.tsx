@@ -89,6 +89,7 @@ type WatchlistSignalsResponse = {
   items: SignalItem[];
 };
 
+
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
 const RISK_FILTERS = ["All", "Low", "Medium", "High"];

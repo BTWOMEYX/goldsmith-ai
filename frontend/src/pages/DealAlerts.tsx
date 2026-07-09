@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import RealmSelect from "../components/RealmSelect";
+import { getGlobalRealmId } from "../utils/globalRealm";
 
 type DealAlert = {
   item_id: number;
@@ -403,7 +404,7 @@ function formatAdjustment(value: number) {
 }
 
 export default function DealAlerts() {
-  const [realm, setRealm] = useState(11);
+  const [realm, setRealm] = useState(() => getGlobalRealmId());
   const [alerts, setAlerts] = useState<DealAlert[]>([]);
   const [topAlert, setTopAlert] = useState<DealAlert | null>(null);
   const [summary, setSummary] = useState<DealSummary>(EMPTY_SUMMARY);

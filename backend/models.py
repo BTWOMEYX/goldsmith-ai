@@ -263,3 +263,22 @@ class TradeEntry(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     sold_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PlanItemAction(Base):
+    __tablename__ = "plan_item_actions"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    item_id = Column(Integer, index=True, nullable=False)
+    realm_id = Column(Integer, index=True, nullable=False)
+    item_name = Column(String, nullable=True)
+
+    action_type = Column(String, index=True, nullable=False)
+    reason = Column(Text, nullable=True)
+
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

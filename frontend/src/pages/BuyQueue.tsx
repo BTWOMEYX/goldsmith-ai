@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import RealmSelect from "../components/RealmSelect";
+import { getGlobalRealmId } from "../utils/globalRealm";
 
 type BuyQueueItem = {
   id: number;
@@ -177,7 +178,7 @@ function getGradeClass(grade: string | null) {
 }
 
 export default function BuyQueue() {
-  const [realm, setRealm] = useState(11);
+  const [realm, setRealm] = useState(() => getGlobalRealmId());
   const [items, setItems] = useState<BuyQueueItem[]>([]);
   const [summary, setSummary] = useState<BuyQueueSummary>(EMPTY_SUMMARY);
   const [statusFilter, setStatusFilter] = useState("queued");

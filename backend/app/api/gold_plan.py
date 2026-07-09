@@ -11,6 +11,7 @@ from app.api.deals import (
 from app.services.ignore_rules import filter_ignored_tracked_items, get_active_ignore_rules
 from app.services.market_memory import build_market_memory_map
 from app.services.performance_feedback import build_feedback_adjustment_map
+from app.services.plan_item_actions import get_plan_action_suppression_summary
 from app.services.strategy_profiles import apply_strategy_to_alert, get_active_strategy_profile
 from app.utils.realms import get_realm_display_name
 from database import get_db
@@ -56,6 +57,9 @@ def is_plan_buy_candidate(item: dict) -> bool:
         return False
 
     if item.get("already_queued_or_tracked"):
+        return False
+
+    if item.get("plan_action_hidden"):
         return False
 
     if item.get("final_decision") not in BUY_DECISIONS:
@@ -366,6 +370,13 @@ async def get_today_gold_plan(
             connected_realm_id=connected_realm_id,
         )
 
+        plan_action_summary = await get_plan_action_suppression_summary(
+            db=db,
+            connected_realm_id=connected_realm_id,
+        )
+
+        plan_action_item_ids = set(plan_action_summary["item_ids"])
+
         watched_keys = await load_watched_keys(db)
 
         snapshot_map = await load_latest_snapshot_map(
@@ -402,6 +413,7 @@ async def get_today_gold_plan(
             )
 
             alert["already_queued_or_tracked"] = item.item_id in excluded_item_ids
+            alert["plan_action_hidden"] = item.item_id in plan_action_item_ids
 
             alert_items.append(alert)
 
@@ -470,6 +482,16 @@ async def get_today_gold_plan(
             ]
         )
 
+        plan_action_hidden_count = len(
+            [
+                item
+                for item in alert_items
+                if item.get("plan_action_hidden")
+            ]
+        )
+
+        plan_action_counts = plan_action_summary["counts"]
+
         plan_quality = calculate_plan_quality(
             buy_count=len(top_buys),
             recommended_spend=recommended_spend,
@@ -493,6 +515,10 @@ async def get_today_gold_plan(
             "avoid_count": len(avoid_items),
             "ignored_count": ignored_count,
             "already_queued_or_tracked_count": duplicate_count,
+            "plan_action_hidden_count": plan_action_hidden_count,
+            "skipped_today_count": plan_action_counts.get("skipped_today", 0),
+            "snoozed_count": plan_action_counts.get("snoozed", 0),
+            "plan_ignored_count": plan_action_counts.get("ignored", 0),
             "max_per_category": max_per_category,
             "capital_warning": build_capital_warning(
                 buy_count=len(top_buys),
@@ -527,6 +553,10 @@ async def get_today_gold_plan(
             "avoid_count": 0,
             "ignored_count": 0,
             "already_queued_or_tracked_count": 0,
+            "plan_action_hidden_count": 0,
+            "skipped_today_count": 0,
+            "snoozed_count": 0,
+            "plan_ignored_count": 0,
             "max_per_category": 2,
             "capital_warning": "Unable to build today's gold plan.",
             "plan_note": "GoldSmith could not build a plan because the backend returned an error.",

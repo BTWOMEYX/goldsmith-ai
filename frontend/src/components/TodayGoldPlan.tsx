@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+ï»¿import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
+  Clock3,
   Coins,
+  EyeOff,
   RefreshCw,
   ShoppingCart,
   Sparkles,
@@ -68,6 +70,10 @@ type GoldPlanResponse = {
   avoid_count: number;
   ignored_count: number;
   already_queued_or_tracked_count: number;
+  plan_action_hidden_count: number;
+  skipped_today_count: number;
+  snoozed_count: number;
+  plan_ignored_count: number;
   max_per_category: number;
   capital_warning: string;
   plan_note: string;
@@ -78,6 +84,8 @@ type GoldPlanResponse = {
 type TodayGoldPlanProps = {
   realm: number;
 };
+
+type PlanAction = "skip-today" | "snooze" | "ignore";
 
 function formatGold(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -120,6 +128,7 @@ export default function TodayGoldPlan({ realm }: TodayGoldPlanProps) {
   const [plan, setPlan] = useState<GoldPlanResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [queueingItem, setQueueingItem] = useState<number | null>(null);
+  const [actingItem, setActingItem] = useState<number | null>(null);
   const [queueingAll, setQueueingAll] = useState(false);
   const [startingScan, setStartingScan] = useState(false);
   const [message, setMessage] = useState("");
@@ -238,6 +247,43 @@ export default function TodayGoldPlan({ realm }: TodayGoldPlanProps) {
     }
   }
 
+  async function applyPlanAction(item: PlanBuy, action: PlanAction) {
+    const endpoint =
+      action === "skip-today"
+        ? "skip-today"
+        : action === "snooze"
+          ? "snooze"
+          : "ignore";
+
+    const label =
+      action === "skip-today"
+        ? "skipped for today"
+        : action === "snooze"
+          ? "snoozed for 24 hours"
+          : "hidden from future plans";
+
+    try {
+      setActingItem(item.item_id);
+      setMessage("");
+      setError("");
+
+      await axios.post(`${API_BASE_URL}/plan-actions/${endpoint}`, {
+        item_id: item.item_id,
+        realm_id: item.realm_id,
+        item_name: item.name,
+        snooze_hours: 24,
+        reason: "Actioned from Today's Gold Plan.",
+      });
+
+      setMessage(`${item.name} ${label}.`);
+      await loadPlan();
+    } catch {
+      setError("Unable to update plan item.");
+    } finally {
+      setActingItem(null);
+    }
+  }
+
   async function runQuickScan() {
     try {
       setStartingScan(true);
@@ -266,10 +312,12 @@ export default function TodayGoldPlan({ realm }: TodayGoldPlanProps) {
     }
 
     window.addEventListener("goldsmith-sync-complete", handleRefresh);
+    window.addEventListener("goldsmith-data-refresh", handleRefresh);
     window.addEventListener("goldsmith-strategy-changed", handleRefresh);
 
     return () => {
       window.removeEventListener("goldsmith-sync-complete", handleRefresh);
+      window.removeEventListener("goldsmith-data-refresh", handleRefresh);
       window.removeEventListener("goldsmith-strategy-changed", handleRefresh);
     };
   }, [realm]);
@@ -280,7 +328,7 @@ export default function TodayGoldPlan({ realm }: TodayGoldPlanProps) {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <Coins size={22} className="text-amber-300" />
-            <h3 className="text-xl font-bold text-white">Today’s Gold Plan</h3>
+            <h3 className="text-xl font-bold text-white">Today's Gold Plan</h3>
 
             {plan && (
               <span
@@ -295,7 +343,7 @@ export default function TodayGoldPlan({ realm }: TodayGoldPlanProps) {
           </div>
 
           <p className="mt-1 text-sm text-slate-400">
-            Fresh queue-ready buys. Already queued and open trades are hidden.
+            Fresh queue-ready buys. Use Skip, Snooze or Hide to move past items.
           </p>
         </div>
 
@@ -354,7 +402,7 @@ export default function TodayGoldPlan({ realm }: TodayGoldPlanProps) {
 
       {loading ? (
         <div className="rounded-xl border border-slate-800 bg-slate-950 p-8 text-center text-sm text-slate-500">
-          Building today’s plan...
+          Building today's plan...
         </div>
       ) : !plan ? (
         <div className="rounded-xl border border-slate-800 bg-slate-950 p-8 text-center text-sm text-slate-500">
@@ -382,9 +430,12 @@ export default function TodayGoldPlan({ realm }: TodayGoldPlanProps) {
             />
           </div>
 
-          {plan.already_queued_or_tracked_count > 0 && (
-            <div className="rounded-xl border border-blue-800 bg-blue-950/30 p-3 text-sm text-blue-300">
-              {plan.already_queued_or_tracked_count} item{plan.already_queued_or_tracked_count === 1 ? "" : "s"} hidden because they are already queued, bought, or tracked.
+          {(plan.already_queued_or_tracked_count > 0 || plan.plan_action_hidden_count > 0) && (
+            <div className="grid gap-3 md:grid-cols-4">
+              <HiddenStat label="Queued / Tracked" value={plan.already_queued_or_tracked_count} />
+              <HiddenStat label="Skipped Today" value={plan.skipped_today_count} />
+              <HiddenStat label="Snoozed" value={plan.snoozed_count} />
+              <HiddenStat label="Hidden" value={plan.plan_ignored_count} />
             </div>
           )}
 
@@ -415,7 +466,7 @@ export default function TodayGoldPlan({ realm }: TodayGoldPlanProps) {
                 {visibleBuys.map((item) => (
                   <div
                     key={`${item.realm_id}-${item.item_id}`}
-                    className="grid gap-3 p-4 lg:grid-cols-[minmax(260px,1fr)_120px_120px_120px_110px]"
+                    className="grid gap-3 p-4 xl:grid-cols-[minmax(260px,1fr)_110px_120px_120px_310px]"
                   >
                     <div className="flex min-w-0 items-center gap-3">
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-800 bg-amber-950/40 text-sm font-bold text-amber-300">
@@ -444,22 +495,53 @@ export default function TodayGoldPlan({ realm }: TodayGoldPlanProps) {
                     <CompactMetric label="Max Each" value={formatGold(item.plan_max_price_each)} />
                     <CompactMetric label="Net Profit" value={formatGold(item.plan_expected_net_profit)} />
 
-                    <button
-                      type="button"
-                      onClick={() => queueBuy(item)}
-                      disabled={queueingItem === item.item_id}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-900/40 disabled:opacity-60"
-                    >
-                      <ShoppingCart size={14} />
-                      Queue
-                    </button>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => queueBuy(item)}
+                        disabled={queueingItem === item.item_id || actingItem === item.item_id}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-900/40 disabled:opacity-60"
+                      >
+                        <ShoppingCart size={14} />
+                        Queue
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => applyPlanAction(item, "skip-today")}
+                        disabled={actingItem === item.item_id}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-slate-800 disabled:opacity-60"
+                      >
+                        Skip
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => applyPlanAction(item, "snooze")}
+                        disabled={actingItem === item.item_id}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-800 bg-blue-950/40 px-3 py-2 text-xs font-semibold text-blue-300 transition hover:bg-blue-900/40 disabled:opacity-60"
+                      >
+                        <Clock3 size={13} />
+                        24h
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => applyPlanAction(item, "ignore")}
+                        disabled={actingItem === item.item_id}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-800 bg-red-950/40 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-900/40 disabled:opacity-60"
+                      >
+                        <EyeOff size={13} />
+                        Hide
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           ) : (
             <div className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center text-sm text-slate-500">
-              No fresh buys for the active strategy. Queue is clear or current market is thin.
+              No fresh buys for the active strategy. Queue is clear, items are hidden, or the current market is thin.
             </div>
           )}
         </div>
@@ -481,6 +563,21 @@ function PlanStat({
     <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
       <p className="text-xs text-slate-500">{label}</p>
       <p className={`mt-2 text-xl font-bold ${tone}`}>{value}</p>
+    </div>
+  );
+}
+
+function HiddenStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-xl border border-blue-800 bg-blue-950/20 p-3">
+      <p className="text-xs text-blue-300">{label}</p>
+      <p className="mt-1 text-lg font-bold text-white">{value}</p>
     </div>
   );
 }

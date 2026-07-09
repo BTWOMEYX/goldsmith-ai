@@ -1,7 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
-import RealmSelect from "./RealmSelect";
-
 import {
   Activity,
   AlertTriangle,
@@ -10,9 +8,14 @@ import {
   ChevronUp,
   Clock3,
   Database,
-  RefreshCw,
   Zap,
 } from "lucide-react";
+
+import RealmSelect from "./RealmSelect";
+import {
+  getGlobalRealmId,
+  listenForGlobalRealmChange,
+} from "../utils/globalRealm";
 
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
@@ -47,11 +50,9 @@ type SyncJob = {
 };
 
 const UI_MODE_KEY = "goldsmith.uiMode";
-const REALM_KEY = "goldsmith.defaultRealm";
-const GOLDSMITH_REALM_CHANGED_EVENT = "goldsmith-realm-changed";
 const LAST_SYNC_KEY = "goldsmith.lastSync";
-const STRATEGY_CHANGED_EVENT = "goldsmith-strategy-changed";
 const EXPANDED_KEY = "goldsmith.globalSyncExpanded";
+const STRATEGY_CHANGED_EVENT = "goldsmith-strategy-changed";
 
 function readUiMode(): UiMode {
   const stored = localStorage.getItem(UI_MODE_KEY);
@@ -61,16 +62,6 @@ function readUiMode(): UiMode {
   }
 
   return "simple";
-}
-
-function readRealmId() {
-  const stored = Number(localStorage.getItem(REALM_KEY));
-
-  if (Number.isFinite(stored) && stored > 0) {
-    return stored;
-  }
-
-  return 11;
 }
 
 function readExpanded() {
@@ -154,7 +145,7 @@ function getPhaseText(job: SyncJob | null) {
 
 export default function GlobalSyncBar() {
   const [uiMode, setUiMode] = useState<UiMode>(() => readUiMode());
-  const [realmId, setRealmId] = useState(() => readRealmId());
+  const [realmId, setRealmId] = useState(() => getGlobalRealmId());
   const [expanded, setExpandedState] = useState(() => readExpanded());
   const [job, setJob] = useState<SyncJob | null>(null);
   const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
@@ -164,10 +155,20 @@ export default function GlobalSyncBar() {
   const [error, setError] = useState("");
   const [startingMode, setStartingMode] = useState<ScanMode | null>(null);
 
+  const realmRef = useRef(realmId);
+  const runningRef = useRef(false);
+  const activeJobLock = useRef(false);
+  const pollJobLock = useRef(false);
+  const metaLock = useRef(false);
+
   const running = isJobRunning(job);
   const progress = getProgress(job);
-  const jobStatus = getJobStatus(job);
   const phaseText = getPhaseText(job);
+
+  useEffect(() => {
+    realmRef.current = realmId;
+    runningRef.current = running;
+  }, [realmId, running]);
 
   const stats = useMemo(() => {
     const captures =
@@ -209,7 +210,7 @@ export default function GlobalSyncBar() {
       {
         label: "Status",
         value: running ? "Running" : error ? "Error" : "Ready",
-        tone: error ? "text-red-400" : running ? "text-emerald-400" : "text-emerald-400",
+        tone: error ? "text-red-400" : "text-emerald-400",
       },
     ];
   }, [job, running, error]);
@@ -256,20 +257,154 @@ export default function GlobalSyncBar() {
     }
   }
 
+  async function loadMetadata() {
+    if (metaLock.current) {
+      return;
+    }
 
-  async function loadStrategy() {
     try {
-      const response = await axios.get<StrategyResponse>(
-        `${API_BASE_URL}/strategy/status`,
+      metaLock.current = true;
+
+      const [autoPilotResponse, strategyResponse] = await Promise.allSettled([
+        axios.get(`${API_BASE_URL}/autopilot/status`),
+        axios.get<StrategyResponse>(`${API_BASE_URL}/strategy/status`),
+      ]);
+
+      if (autoPilotResponse.status === "fulfilled") {
+        const state =
+          autoPilotResponse.value.data?.state ?? autoPilotResponse.value.data;
+        setAutoPilotEnabled(Boolean(state?.enabled));
+      }
+
+      if (
+        strategyResponse.status === "fulfilled" &&
+        strategyResponse.value.data.status === "Success"
+      ) {
+        setStrategyProfile(strategyResponse.value.data.active_profile);
+        setStrategyProfiles(strategyResponse.value.data.profiles);
+      }
+
+      loadLastSyncLabel();
+    } finally {
+      metaLock.current = false;
+    }
+  }
+
+  async function reconnectActiveJob(targetRealmId = realmRef.current) {
+    if (activeJobLock.current || runningRef.current) {
+      return;
+    }
+
+    try {
+      activeJobLock.current = true;
+
+      const response = await axios.get(
+        `${API_BASE_URL}/sync-jobs/active?connected_realm_id=${targetRealmId}`,
       );
 
-      if (response.data.status === "Success") {
-        setStrategyProfile(response.data.active_profile);
-        setStrategyProfiles(response.data.profiles);
+      const activeJob = getJobFromResponse(response.data);
+
+      if (activeJob && isJobRunning(activeJob)) {
+        setJob(activeJob);
       }
     } catch {
-      setStrategyProfile(null);
-      setStrategyProfiles([]);
+      // Quietly ignore while backend is unavailable.
+    } finally {
+      activeJobLock.current = false;
+    }
+  }
+
+  async function pollJob(jobId: string) {
+    if (pollJobLock.current) {
+      return;
+    }
+
+    try {
+      pollJobLock.current = true;
+
+      const response = await axios.get(`${API_BASE_URL}/sync-jobs/${jobId}`);
+      const freshJob = getJobFromResponse(response.data);
+
+      if (!freshJob) {
+        return;
+      }
+
+      setJob(freshJob);
+
+      if (!isJobRunning(freshJob)) {
+        const status = getJobStatus(freshJob);
+
+        if (status === "failed" || status === "error") {
+          setError(String(freshJob.error ?? "Sync failed."));
+          return;
+        }
+
+        const completedAt = new Date().toISOString();
+
+        localStorage.setItem(
+          LAST_SYNC_KEY,
+          JSON.stringify({
+            completed_at: completedAt,
+            scan_mode: freshJob.scan_mode,
+            realm_id: realmRef.current,
+            result: freshJob.result ?? freshJob.stats ?? {},
+          }),
+        );
+
+        loadLastSyncLabel();
+
+        const refreshDetail = {
+          realmId: realmRef.current,
+          connectedRealmId: realmRef.current,
+          jobId: freshJob.job_id,
+          scanMode: freshJob.scan_mode,
+          completedAt,
+          reason: "sync-complete",
+        };
+
+        window.dispatchEvent(
+          new CustomEvent("goldsmith-sync-complete", {
+            detail: refreshDetail,
+          }),
+        );
+
+        window.dispatchEvent(
+          new CustomEvent("goldsmith-data-refresh", {
+            detail: refreshDetail,
+          }),
+        );
+      }
+    } catch {
+      setError("Unable to read backend sync job.");
+    } finally {
+      pollJobLock.current = false;
+    }
+  }
+
+  async function startSync(scanMode: ScanMode) {
+    try {
+      setStartingMode(scanMode);
+      setError("");
+      setExpanded(true);
+
+      const targetRealmId = realmRef.current;
+
+      const response = await axios.post(
+        `${API_BASE_URL}/sync-jobs/start?connected_realm_id=${targetRealmId}&scan_mode=${scanMode}`,
+      );
+
+      const startedJob = getJobFromResponse(response.data);
+
+      if (!startedJob) {
+        setError("Backend did not return a sync job.");
+        return;
+      }
+
+      setJob(startedJob);
+    } catch {
+      setError("Unable to start backend sync job.");
+    } finally {
+      setStartingMode(null);
     }
   }
 
@@ -294,151 +429,72 @@ export default function GlobalSyncBar() {
           }),
         );
 
-        window.dispatchEvent(new CustomEvent("goldsmith-sync-complete"));
+        window.dispatchEvent(
+          new CustomEvent("goldsmith-data-refresh", {
+            detail: {
+              realmId: realmRef.current,
+              connectedRealmId: realmRef.current,
+              reason: "strategy-changed",
+              completedAt: new Date().toISOString(),
+            },
+          }),
+        );
       }
     } catch {
-      // Keep the sync bar quiet if strategy API is unavailable.
-    }
-  }
-
-  async function loadAutoPilot() {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/autopilot/status`);
-      const state = response.data?.state ?? response.data;
-
-      setAutoPilotEnabled(Boolean(state?.enabled));
-    } catch {
-      setAutoPilotEnabled(false);
-    }
-  }
-
-  async function reconnectActiveJob() {
-    try {
-      const response = await axios.get(
-        `${API_BASE_URL}/sync-jobs/active?connected_realm_id=${realmId}`,
-      );
-
-      const activeJob = getJobFromResponse(response.data);
-
-      if (activeJob && isJobRunning(activeJob)) {
-        setJob(activeJob);
-      }
-    } catch {
-      // Keep the bar quiet if the backend is not available yet.
-    }
-  }
-
-  async function pollJob(jobId: string) {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/sync-jobs/${jobId}`);
-      const freshJob = getJobFromResponse(response.data);
-
-      if (!freshJob) {
-        return;
-      }
-
-      setJob(freshJob);
-
-      if (!isJobRunning(freshJob)) {
-        const status = getJobStatus(freshJob);
-
-        if (status === "failed" || status === "error") {
-          setError(String(freshJob.error ?? "Sync failed."));
-        } else {
-          localStorage.setItem(
-            LAST_SYNC_KEY,
-            JSON.stringify({
-              completed_at: new Date().toISOString(),
-              scan_mode: freshJob.scan_mode,
-              result: freshJob.result ?? freshJob.stats ?? {},
-            }),
-          );
-
-          loadLastSyncLabel();
-          window.dispatchEvent(new CustomEvent("goldsmith-sync-complete"));
-        }
-      }
-    } catch {
-      setError("Unable to read backend sync job.");
-    }
-  }
-
-  async function startSync(scanMode: ScanMode) {
-    try {
-      setStartingMode(scanMode);
-      setError("");
-      setExpanded(true);
-
-      const response = await axios.post(
-        `${API_BASE_URL}/sync-jobs/start?connected_realm_id=${realmId}&scan_mode=${scanMode}`,
-      );
-
-      const startedJob = getJobFromResponse(response.data);
-
-      if (!startedJob) {
-        setError("Backend did not return a sync job.");
-        return;
-      }
-
-      setJob(startedJob);
-    } catch {
-      setError("Unable to start backend sync job.");
-    } finally {
-      setStartingMode(null);
+      // Keep quiet if strategy API is unavailable.
     }
   }
 
   useEffect(() => {
-    loadLastSyncLabel();
-    loadAutoPilot();
-    loadStrategy();
+    loadMetadata();
     reconnectActiveJob();
 
-    const interval = window.setInterval(() => {
-      const latestMode = readUiMode();
-      const latestRealm = readRealmId();
+    const metadataInterval = window.setInterval(() => {
+      loadMetadata();
+    }, 15000);
 
-      setUiMode(latestMode);
-      setRealmId(latestRealm);
-      loadLastSyncLabel();
-      loadAutoPilot();
-      loadStrategy();
-
-      if (!running) {
-        reconnectActiveJob();
-      }
-    }, 5000);
+    const activeJobInterval = window.setInterval(() => {
+      reconnectActiveJob();
+    }, 8000);
 
     function handleModeChange() {
       setUiMode(readUiMode());
     }
 
-    function handleRealmChanged(event: Event) {
-      const customEvent = event as CustomEvent<{ realmId?: number }>;
-      const eventRealmId = Number(customEvent.detail?.realmId);
-
-      if (Number.isFinite(eventRealmId) && eventRealmId > 0) {
-        setRealmId(eventRealmId);
-        setJob(null);
-        reconnectActiveJob();
-      }
-    }
-
     function handleStrategyChanged() {
-      loadStrategy();
+      loadMetadata();
     }
+
+    const stopRealmListener = listenForGlobalRealmChange((nextRealmId) => {
+      setRealmId(nextRealmId);
+      setJob(null);
+      setError("");
+
+      window.dispatchEvent(
+        new CustomEvent("goldsmith-data-refresh", {
+          detail: {
+            realmId: nextRealmId,
+            connectedRealmId: nextRealmId,
+            reason: "realm-changed",
+            completedAt: new Date().toISOString(),
+          },
+        }),
+      );
+
+      window.setTimeout(() => reconnectActiveJob(nextRealmId), 250);
+    });
 
     window.addEventListener("goldsmith-ui-mode-changed", handleModeChange);
-    window.addEventListener(GOLDSMITH_REALM_CHANGED_EVENT, handleRealmChanged);
     window.addEventListener(STRATEGY_CHANGED_EVENT, handleStrategyChanged);
 
     return () => {
-      window.clearInterval(interval);
+      window.clearInterval(metadataInterval);
+      window.clearInterval(activeJobInterval);
       window.removeEventListener("goldsmith-ui-mode-changed", handleModeChange);
-      window.removeEventListener(GOLDSMITH_REALM_CHANGED_EVENT, handleRealmChanged);
       window.removeEventListener(STRATEGY_CHANGED_EVENT, handleStrategyChanged);
+      stopRealmListener();
     };
-  }, [realmId, running]);
+  }, []);
 
   useEffect(() => {
     if (!job?.job_id || !running) {
@@ -447,7 +503,7 @@ export default function GlobalSyncBar() {
 
     const interval = window.setInterval(() => {
       pollJob(String(job.job_id));
-    }, 1200);
+    }, 1500);
 
     return () => window.clearInterval(interval);
   }, [job?.job_id, running]);
@@ -510,7 +566,9 @@ export default function GlobalSyncBar() {
             value={realmId}
             onChange={(nextRealmId) => {
               setRealmId(nextRealmId);
+              realmRef.current = nextRealmId;
               setJob(null);
+              setError("");
             }}
           />
 
@@ -612,7 +670,11 @@ export default function GlobalSyncBar() {
           </span>
 
           <span>
-            Opportunities {formatNumber(getStat(job, "opportunities_unlocked") || getStat(job, "candidates_found"))}
+            Opportunities{" "}
+            {formatNumber(
+              getStat(job, "opportunities_unlocked") ||
+                getStat(job, "candidates_found"),
+            )}
           </span>
         </div>
       )}
